@@ -1,0 +1,10 @@
+# Server
+server/server
+
+# Client
+client/node_modules/
+client/.next/
+client/out/
+
+# OS
+.DS_Store
