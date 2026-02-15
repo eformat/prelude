@@ -14,8 +14,10 @@ The server listens on `:8080` and exposes a `POST /api/claim` endpoint. It recei
 
 The server requires a `--cluster-pool` flag to filter ClusterClaims by `spec.clusterPoolName`.
 
+The server also accepts a `--cluster-lifetime` flag (default `2h`) to set the `spec.lifetime` on claimed ClusterClaims.
+
 ```bash
-./server --cluster-pool roadshow-lvtjv
+./server --cluster-pool roadshow-lvtjv --cluster-lifetime 2h
 ```
 
 Phone numbers are sanitized to valid Kubernetes label values (alphanumeric, `-`, `_`, `.`).
@@ -59,6 +61,12 @@ If no ClusterClaim exists with the label "prelude: phone-number" grab the first 
 CLUSTER_CLAIM_NAME=road1
 PHONE_NUMBER=61-435-065-758
 oc -n cluster-pools label clusterclaim.hive.openshift.io $CLUSTER_CLAIM_NAME prelude=$PHONE_NUMBER
+```
+
+When a cluster is claimed, the server also patches `spec.lifetime` on the ClusterClaim with the configured `--cluster-lifetime` value. The equivalent command line is:
+
+```bash
+oc -n cluster-pools patch clusterclaim.hive.openshift.io prelude1 --type merge -p '{"spec":{"lifetime":"2h"}}'
 ```
 
 We can remove the label by doing the equivalent command line:

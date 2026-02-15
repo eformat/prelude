@@ -3,6 +3,7 @@ server:
     repository: quay.io/eformat/prelude-server
     tag: latest
   clusterPool: ""
+  clusterLifetime: "2h"
   kubeconfigSecret: prelude-kubeconfig
 
 client:

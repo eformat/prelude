@@ -37,6 +37,8 @@ spec:
               value: /etc/prelude/kubeconfig/kubeconfig
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
+            - name: CLUSTER_LIFETIME
+              value: "{{ .Values.server.clusterLifetime }}"
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/prelude/kubeconfig

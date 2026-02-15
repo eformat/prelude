@@ -67,12 +67,17 @@ type claimResponse struct {
 
 func main() {
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter ClusterClaims by (required)")
+	clusterLifetime := flag.String("cluster-lifetime", os.Getenv("CLUSTER_LIFETIME"), "Lifetime to set on claimed ClusterClaims (e.g. 2h)")
 	flag.Parse()
 
 	if *clusterPool == "" {
 		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
 	}
+	if *clusterLifetime == "" {
+		*clusterLifetime = "2h"
+	}
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
+	log.Printf("Cluster lifetime: %s", *clusterLifetime)
 
 	kubeconfig := os.Getenv("KUBECONFIG")
 	if kubeconfig == "" {
@@ -98,9 +103,10 @@ func main() {
 	}
 
 	pool := *clusterPool
+	lifetime := *clusterLifetime
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
-		handleClaim(w, r, dynClient, clientset, pool)
+		handleClaim(w, r, dynClient, clientset, pool, lifetime)
 	})
 
 	staticDir := filepath.Join("..", "client", "out")
@@ -111,7 +117,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
-func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string) {
+func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string, clusterLifetime string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -192,12 +198,17 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				}
 				labels["prelude"] = phone
 				claim.SetLabels(labels)
+
+				// Set spec.lifetime on the ClusterClaim
+				spec["lifetime"] = clusterLifetime
+
 				_, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
 				if err != nil {
 					log.Printf("Error labeling cluster claim %s: %v", claimName, err)
 					http.Error(w, "Failed to assign cluster", http.StatusInternalServerError)
 					return
 				}
+				log.Printf("Set lifetime %s on cluster claim %s", clusterLifetime, claimName)
 				found = true
 				break
 			}

@@ -1,4 +1,4 @@
-.PHONY: client-run server-run build-client build-server build-all run-all podman-server-build podman-client-build podman-build-all helm-deploy
+.PHONY: client-run server-run build-client build-server build-all run-all podman-server-build podman-client-build podman-build-all podman-push-all helm-deploy
 
 build-all: build-server build-client
 
@@ -25,6 +25,10 @@ podman-server-build:
 
 podman-client-build:
 	podman build $(PODMAN_ARGS) -f Containerfile.client -t quay.io/eformat/prelude-client:latest .
+
+podman-push-all:
+	podman push quay.io/eformat/prelude-server:latest
+	podman push quay.io/eformat/prelude-client:latest
 
 helm-deploy:
 	helm upgrade --install prelude ./chart $(HELM_ARGS)
