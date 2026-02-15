@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prelude.fullname" . }}
+  labels:
+    {{- include "prelude.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "prelude.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prelude.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: client
+          image: "{{ .Values.client.image.repository }}:{{ .Values.client.image.tag }}"
+          imagePullPolicy: {{ .Values.client.image.pullPolicy | default "Always" }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3000"
+            - name: NODE_ENV
+              value: production
+        - name: server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default "Always" }}
+          env:
+            - name: KUBECONFIG
+              value: /etc/prelude/kubeconfig/kubeconfig
+            - name: CLUSTER_POOL
+              value: "{{ .Values.server.clusterPool }}"
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/prelude/kubeconfig
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Values.server.kubeconfigSecret }}

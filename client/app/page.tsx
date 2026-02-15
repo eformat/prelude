@@ -352,7 +352,7 @@ export default function Home() {
                     <ExternalIcon />
                   </a>
                   <p className="mt-3 font-rh-text text-sm text-rh-gray-60">
-                    Use the <span className="font-bold text-rh-gray-95">admin</span> user and your password to login
+                    Use the <span className="font-bold text-rh-gray-95">admin</span> user and your password to login. It may take a moment for the cluster to be ready.
                   </p>
                 </div>
               </div>

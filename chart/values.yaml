@@ -1,0 +1,14 @@
+server:
+  image:
+    repository: quay.io/eformat/prelude-server
+    tag: latest
+  clusterPool: ""
+  kubeconfigSecret: prelude-kubeconfig
+
+client:
+  image:
+    repository: quay.io/eformat/prelude-client
+    tag: latest
+
+route:
+  host: ""

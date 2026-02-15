@@ -65,11 +65,11 @@ type claimResponse struct {
 }
 
 func main() {
-	clusterPool := flag.String("cluster-pool", "", "ClusterPool name to filter ClusterClaims by (required)")
+	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter ClusterClaims by (required)")
 	flag.Parse()
 
 	if *clusterPool == "" {
-		log.Fatalf("--cluster-pool flag is required")
+		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
 	}
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
 
