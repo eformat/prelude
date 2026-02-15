@@ -102,6 +102,15 @@ These are displayed in the web app with easy copy and download buttons displayed
 
 The client proxies `/api/*` requests to the Go server at `http://0.0.0.0:8080` in both dev mode (via Next.js rewrites) and standalone container mode. The API URL is configurable via the `API_URL` environment variable.
 
+## reCAPTCHA
+
+Google reCAPTCHA v3 protects the `/api/claim` endpoint from bots. It is optional -- if the env vars are not set, verification is skipped.
+
+Both env vars are set on the Go server container:
+
+- `RECAPTCHA_SITE_KEY` — reCAPTCHA v3 site key (public). Served to the client at runtime via the `GET /api/config` endpoint.
+- `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA verification is disabled.
+
 ## Build
 
 ```bash

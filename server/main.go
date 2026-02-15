@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
@@ -33,12 +37,18 @@ var (
 		Version:  "v1",
 		Resource: "clusterdeployments",
 	}
-	clusterPoolNamespace = "cluster-pools"
+	clusterPoolNamespace  = "cluster-pools"
+	recaptchaVerifyURL    = "https://www.google.com/recaptcha/api/siteverify"
+	recaptchaMinScore     = 0.5
 )
 
+var recaptchaSecretKey string
+var recaptchaSiteKey string
+
 type claimRequest struct {
-	Phone    string `json:"phone"`
-	Password string `json:"password"`
+	Phone          string `json:"phone"`
+	Password       string `json:"password"`
+	RecaptchaToken string `json:"recaptchaToken"`
 }
 
 // sanitizePhone converts a phone number into a valid Kubernetes label value.
@@ -59,10 +69,107 @@ func sanitizePhone(phone string) string {
 	return result
 }
 
+// parseDuration parses a duration string supporting d (days), h (hours), and m (minutes).
+// Examples: "2h", "30m", "1d", "1d12h", "2h30m".
+func parseDuration(s string) (time.Duration, error) {
+	var total time.Duration
+	current := ""
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			current += string(c)
+		} else {
+			if current == "" {
+				return 0, fmt.Errorf("invalid duration: %s", s)
+			}
+			n, err := strconv.Atoi(current)
+			if err != nil {
+				return 0, fmt.Errorf("invalid duration: %s", s)
+			}
+			switch c {
+			case 'd':
+				total += time.Duration(n) * 24 * time.Hour
+			case 'h':
+				total += time.Duration(n) * time.Hour
+			case 'm':
+				total += time.Duration(n) * time.Minute
+			default:
+				return 0, fmt.Errorf("invalid duration unit %q in: %s", string(c), s)
+			}
+			current = ""
+		}
+	}
+	if current != "" {
+		return 0, fmt.Errorf("invalid duration (trailing number without unit): %s", s)
+	}
+	return total, nil
+}
+
+// formatDuration formats a duration using d, h, m units.
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0m"
+	}
+	var parts []string
+	days := int(d.Hours()) / 24
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dd", days))
+		d -= time.Duration(days) * 24 * time.Hour
+	}
+	hours := int(d.Hours())
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+		d -= time.Duration(hours) * time.Hour
+	}
+	minutes := int(d.Minutes())
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	if len(parts) == 0 {
+		return "1m"
+	}
+	return strings.Join(parts, "")
+}
+
 type claimResponse struct {
 	WebConsoleURL string `json:"webConsoleURL"`
 	AIConsoleURL  string `json:"aiConsoleURL"`
 	Kubeconfig    string `json:"kubeconfig"`
+}
+
+type recaptchaResponse struct {
+	Success bool    `json:"success"`
+	Score   float64 `json:"score"`
+}
+
+func verifyRecaptcha(token string) error {
+	resp, err := http.PostForm(recaptchaVerifyURL, url.Values{
+		"secret":   {recaptchaSecretKey},
+		"response": {token},
+	})
+	if err != nil {
+		return fmt.Errorf("recaptcha request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading recaptcha response: %w", err)
+	}
+
+	var result recaptchaResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("parsing recaptcha response: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("recaptcha verification failed")
+	}
+
+	if result.Score < recaptchaMinScore {
+		return fmt.Errorf("recaptcha score %.2f below threshold %.2f", result.Score, recaptchaMinScore)
+	}
+
+	return nil
 }
 
 func main() {
@@ -76,6 +183,14 @@ func main() {
 	if *clusterLifetime == "" {
 		*clusterLifetime = "2h"
 	}
+	recaptchaSecretKey = os.Getenv("RECAPTCHA_SECRET_KEY")
+	recaptchaSiteKey = os.Getenv("RECAPTCHA_SITE_KEY")
+	if recaptchaSecretKey != "" {
+		log.Printf("reCAPTCHA verification enabled")
+	} else {
+		log.Printf("reCAPTCHA verification disabled (RECAPTCHA_SECRET_KEY not set)")
+	}
+
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
 	log.Printf("Cluster lifetime: %s", *clusterLifetime)
 
@@ -105,6 +220,7 @@ func main() {
 	pool := *clusterPool
 	lifetime := *clusterLifetime
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
 		handleClaim(w, r, dynClient, clientset, pool, lifetime)
 	})
@@ -117,6 +233,13 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"recaptchaSiteKey": recaptchaSiteKey,
+	})
+}
+
 func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string, clusterLifetime string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -127,6 +250,19 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// Verify reCAPTCHA token if secret key is configured
+	if recaptchaSecretKey != "" {
+		if req.RecaptchaToken == "" {
+			http.Error(w, "reCAPTCHA token is required", http.StatusForbidden)
+			return
+		}
+		if err := verifyRecaptcha(req.RecaptchaToken); err != nil {
+			log.Printf("reCAPTCHA verification failed: %v", err)
+			http.Error(w, "reCAPTCHA verification failed", http.StatusForbidden)
+			return
+		}
 	}
 
 	phone := sanitizePhone(strings.TrimSpace(req.Phone))
@@ -199,16 +335,24 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				labels["prelude"] = phone
 				claim.SetLabels(labels)
 
-				// Set spec.lifetime on the ClusterClaim
-				spec["lifetime"] = clusterLifetime
+				// Set spec.lifetime = age + configured lifetime
+				configuredDuration, err := parseDuration(clusterLifetime)
+				if err != nil {
+					log.Printf("Error parsing cluster lifetime %q: %v", clusterLifetime, err)
+					http.Error(w, "Invalid cluster lifetime configuration", http.StatusInternalServerError)
+					return
+				}
+				age := time.Since(claim.GetCreationTimestamp().Time)
+				totalLifetime := age + configuredDuration
+				spec["lifetime"] = formatDuration(totalLifetime)
+				log.Printf("Cluster claim %s age=%s, configured=%s, setting lifetime=%s", claimName, formatDuration(age), clusterLifetime, formatDuration(totalLifetime))
 
-				_, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
+				_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
 				if err != nil {
 					log.Printf("Error labeling cluster claim %s: %v", claimName, err)
 					http.Error(w, "Failed to assign cluster", http.StatusInternalServerError)
 					return
 				}
-				log.Printf("Set lifetime %s on cluster claim %s", clusterLifetime, claimName)
 				found = true
 				break
 			}

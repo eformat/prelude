@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 
 interface ClusterInfo {
   webConsoleURL: string;
@@ -79,6 +80,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const { executeRecaptcha } = useGoogleReCaptcha();
 
   function validatePhone(value: string): string | null {
     const digits = value.replace(/\D/g, "");
@@ -105,12 +107,21 @@ export default function Home() {
     setLoading(true);
 
     try {
+      let recaptchaToken = "";
+      try {
+        if (executeRecaptcha) {
+          recaptchaToken = await executeRecaptcha("claim");
+        }
+      } catch {
+        // reCAPTCHA not available, continue without token
+      }
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120000);
       const res = await fetch("/api/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, password }),
+        body: JSON.stringify({ phone, password, recaptchaToken }),
         signal: controller.signal,
       });
       clearTimeout(timeout);

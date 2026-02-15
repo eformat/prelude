@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import ReCaptchaProvider from "./recaptcha-provider";
 
 export const metadata: Metadata = {
   title: "Prelude - Cluster Access",
@@ -14,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-rh-gray-10 min-h-screen font-rh-text text-rh-gray-95">
-        {children}
+        <ReCaptchaProvider>{children}</ReCaptchaProvider>
       </body>
     </html>
   );

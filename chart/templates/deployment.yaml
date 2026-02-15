@@ -39,6 +39,14 @@ spec:
               value: "{{ .Values.server.clusterPool }}"
             - name: CLUSTER_LIFETIME
               value: "{{ .Values.server.clusterLifetime }}"
+            {{- if .Values.server.recaptchaSiteKey }}
+            - name: RECAPTCHA_SITE_KEY
+              value: "{{ .Values.server.recaptchaSiteKey }}"
+            {{- end }}
+            {{- if .Values.server.recaptchaSecretKey }}
+            - name: RECAPTCHA_SECRET_KEY
+              value: "{{ .Values.server.recaptchaSecretKey }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/prelude/kubeconfig

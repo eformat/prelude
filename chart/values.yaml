@@ -5,6 +5,8 @@ server:
   clusterPool: ""
   clusterLifetime: "2h"
   kubeconfigSecret: prelude-kubeconfig
+  recaptchaSiteKey: ""
+  recaptchaSecretKey: ""
 
 client:
   image:

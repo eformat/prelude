@@ -6,6 +6,7 @@ module.exports = (phase) => {
   /** @type {import('next').NextConfig} */
   const nextConfig = {
     output,
+    devIndicators: false,
   };
 
   if (phase === PHASE_DEVELOPMENT_SERVER) {
