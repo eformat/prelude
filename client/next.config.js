@@ -18,8 +18,8 @@ module.exports = (phase) => {
     const apiUrl = process.env.API_URL || 'http://0.0.0.0:8080';
     nextConfig.rewrites = async () => [
       {
-        source: '/api/:path*',
-        destination: `${apiUrl}/api/:path*`,
+        source: '/api/config',
+        destination: `${apiUrl}/api/config`,
       },
     ];
   }

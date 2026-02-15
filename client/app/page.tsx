@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
+import { claimCluster } from "./actions";
 
 interface ClusterInfo {
   webConsoleURL: string;
@@ -116,32 +117,14 @@ export default function Home() {
         // reCAPTCHA not available, continue without token
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120000);
-      const res = await fetch("/api/claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, password, recaptchaToken }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+      const result = await claimCluster(phone, password, recaptchaToken);
 
-      if (!res.ok) {
-        try {
-          const body = await res.json();
-          if (body.error === "all_clusters_in_use") {
-            setError("all_clusters_in_use");
-            return;
-          }
-        } catch {
-          // not JSON, fall through
-        }
-        setError("Failed to claim cluster");
+      if (!result.success) {
+        setError(result.error);
         return;
       }
 
-      const data: ClusterInfo = await res.json();
-      setCluster(data);
+      setCluster(result.data);
     } catch {
       setError("Network error. Please try again.");
     } finally {

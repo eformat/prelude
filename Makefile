@@ -13,7 +13,7 @@ server-run:
 	cd server && ./server
 
 build-client:
-	cd client && npm run build
+	cd client && NEXT_OUTPUT=standalone npm run build
 
 build-server:
 	cd server && go build ./...
