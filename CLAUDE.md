@@ -69,7 +69,7 @@ PHONE_NUMBER=61-435-065-758
 oc -n cluster-pools label clusterclaim.hive.openshift.io $CLUSTER_CLAIM_NAME prelude=$PHONE_NUMBER
 ```
 
-When a cluster is claimed, the server also patches `spec.lifetime` on the ClusterClaim with the configured `--cluster-lifetime` value. The equivalent command line is:
+When a cluster is claimed, the server sets `spec.lifetime` on the ClusterClaim to the ClusterClaim's current age plus the configured `--cluster-lifetime` value. Duration values support `d` (days), `h` (hours), and `m` (minutes) units (e.g. `2h`, `1d12h`, `30m`). The equivalent command line is:
 
 ```bash
 oc -n cluster-pools patch clusterclaim.hive.openshift.io prelude1 --type merge -p '{"spec":{"lifetime":"2h"}}'
@@ -94,19 +94,21 @@ This must be stored in the spoke cluster using the returned spoke cluster KUBECO
 oc get secret htpass-secret -n openshift-config -o template='{{ .data }}'
 ```
 
+The server also returns an `expiresAt` field (RFC 3339 UTC timestamp) in the claim response, computed as the ClusterClaim's `creationTimestamp` plus `spec.lifetime`. For already-claimed clusters (phone number matches an existing label), the expiry is read from the existing `spec.lifetime`. For newly-claimed clusters, it uses the freshly computed lifetime.
+
 If all the ClusterClaim's have a label "prelude: phone-number", and we cannot match the provided phone number, then display a nice message to the user - "All our clusters are in use at the moment, try again later".
 
 ## Client Side
 
 A Next.js 15, Tailwind CSS web app styled to match the Red Hat design system (Red Hat Display/Text fonts, Red Hat brand colors, dark hero section).
 
-A user enters their phone number and an admin password and receives back a spoke cluster webConsoleURL and KUBECONFIG.
+A user enters their phone number and an admin password and receives back a spoke cluster webConsoleURL, KUBECONFIG, and expiry time.
 
 The phone number is validated client-side (7-15 digits). The password field has a reveal/hide toggle.
 
-These are displayed in the web app with easy copy and download buttons displayed for the user. The Web Console URL card includes instructions to login with the "admin" user.
+These are displayed in the web app with easy copy and download buttons displayed for the user. The Web Console URL card includes instructions to login with the "admin" user. A Cluster Lifetime card shows the expiry date/time in human-readable format and a live countdown timer.
 
-The client proxies `/api/*` requests to the Go server at `http://0.0.0.0:8080` in both dev mode (via Next.js rewrites) and standalone container mode. The API URL is configurable via the `API_URL` environment variable.
+The `/api/claim` call is made via a Next.js Server Action (not exposed to the browser). The client proxies `/api/config` to the Go server at `http://0.0.0.0:8080` via Next.js rewrites. The API URL is configurable via the `API_URL` environment variable.
 
 ## reCAPTCHA
 

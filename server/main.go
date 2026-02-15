@@ -134,6 +134,7 @@ type claimResponse struct {
 	WebConsoleURL string `json:"webConsoleURL"`
 	AIConsoleURL  string `json:"aiConsoleURL"`
 	Kubeconfig    string `json:"kubeconfig"`
+	ExpiresAt     string `json:"expiresAt"`
 }
 
 type recaptchaResponse struct {
@@ -289,6 +290,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 	var claimName string
 	var clusterName string
+	var expiresAt time.Time
 	found := false
 
 	// Check if any ClusterClaim already has this phone number
@@ -304,6 +306,14 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				ns, ok := spec["namespace"].(string)
 				if ok {
 					clusterName = ns
+				}
+			}
+			// Compute expiry from existing spec.lifetime
+			if spec != nil {
+				if lt, ok := spec["lifetime"].(string); ok {
+					if d, err := parseDuration(lt); err == nil {
+						expiresAt = claim.GetCreationTimestamp().Time.Add(d)
+					}
 				}
 			}
 			found = true
@@ -345,6 +355,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				age := time.Since(claim.GetCreationTimestamp().Time)
 				totalLifetime := age + configuredDuration
 				spec["lifetime"] = formatDuration(totalLifetime)
+				expiresAt = claim.GetCreationTimestamp().Time.Add(totalLifetime)
 				log.Printf("Cluster claim %s age=%s, configured=%s, setting lifetime=%s", claimName, formatDuration(age), clusterLifetime, formatDuration(totalLifetime))
 
 				_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
@@ -438,6 +449,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		WebConsoleURL: webConsoleURL,
 		AIConsoleURL:  aiConsoleURL,
 		Kubeconfig:    userKubeconfigData,
+		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

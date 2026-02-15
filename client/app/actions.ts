@@ -8,6 +8,7 @@ interface ClaimResult {
     webConsoleURL: string;
     aiConsoleURL: string;
     kubeconfig: string;
+    expiresAt: string;
   };
 }
 

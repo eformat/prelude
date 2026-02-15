@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { claimCluster } from "./actions";
 
@@ -8,6 +8,7 @@ interface ClusterInfo {
   webConsoleURL: string;
   aiConsoleURL: string;
   kubeconfig: string;
+  expiresAt: string;
 }
 
 function CopyIcon() {
@@ -70,6 +71,81 @@ function EyeOffIcon() {
       <path d="M5.1 5.1C3.36 6.26 2.07 8 1.5 9c.96 1.68 3.54 5.25 7.5 5.25 1.55 0 2.9-.54 4.02-1.28M14.85 12.15C16.24 10.98 16.5 9 16.5 9c-.96-1.68-3.54-5.25-7.5-5.25-.63 0-1.23.09-1.8.23" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M2.25 2.25L15.75 15.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8 4.5V8L10.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CountdownTimer({ expiresAt }: { expiresAt: string }) {
+  const [remaining, setRemaining] = useState("");
+  const [expired, setExpired] = useState(false);
+
+  useEffect(() => {
+    function update() {
+      const now = Date.now();
+      const end = new Date(expiresAt).getTime();
+      const diff = end - now;
+
+      if (diff <= 0) {
+        setRemaining("0h 0m 0s");
+        setExpired(true);
+        return;
+      }
+
+      setExpired(false);
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      const parts = [];
+      if (days > 0) parts.push(`${days}d`);
+      parts.push(`${hours}h`);
+      parts.push(`${minutes}m`);
+      parts.push(`${seconds}s`);
+      setRemaining(parts.join(" "));
+    }
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+
+  const expiryDate = new Date(expiresAt);
+  const formatted = expiryDate.toLocaleString(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
+  return (
+    <div className="px-6 py-5">
+      <div className="flex items-center gap-3 mb-3">
+        <span className="font-rh-text text-rh-gray-60 text-sm">Expires</span>
+        <span className="font-rh-text text-rh-gray-95 text-sm font-medium">
+          {formatted}
+        </span>
+      </div>
+      <div className={`font-mono text-2xl font-bold tracking-wider ${expired ? "text-rh-red-50" : "text-rh-gray-95"}`}>
+        {remaining}
+      </div>
+      {expired && (
+        <p className="mt-2 font-rh-text text-sm text-rh-red-50">
+          This cluster has expired and will be reclaimed.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -389,10 +465,26 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Cluster Lifetime Card */}
+              <div
+                className="bg-white border border-rh-gray-20 animate-fade-in-up"
+                style={{ animationDelay: '0.2s' }}
+              >
+                <div className="border-b border-rh-gray-20 px-6 py-4">
+                  <div className="flex items-center gap-3">
+                    <ClockIcon />
+                    <h3 className="font-rh-display text-rh-gray-95 text-base font-bold">
+                      Cluster Lifetime
+                    </h3>
+                  </div>
+                </div>
+                <CountdownTimer expiresAt={cluster.expiresAt} />
+              </div>
+
               {/* Kubeconfig Card */}
               <div
                 className="bg-white border border-rh-gray-20 lg:row-span-1 animate-fade-in-up"
-                style={{ animationDelay: '0.2s' }}
+                style={{ animationDelay: '0.25s' }}
               >
                 <div className="border-b border-rh-gray-20 px-6 py-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
