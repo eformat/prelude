@@ -8,6 +8,11 @@ server:
   recaptchaSiteKey: ""
   recaptchaSecretKey: ""
 
+clusterClaimer:
+  image:
+    repository: quay.io/eformat/prelude-cluster-claimer
+    tag: latest
+
 client:
   image:
     repository: quay.io/eformat/prelude-client

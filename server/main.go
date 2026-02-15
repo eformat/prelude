@@ -542,8 +542,19 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 		return fmt.Errorf("getting htpass-secret: %w", err)
 	}
 
-	// Update the htpasswd data
+	// Check if the existing password already matches
 	log.Printf("Existing htpass-secret found, data keys: %v", secretDataKeys(secret))
+	if existing, ok := secret.Data["htpasswd"]; ok {
+		// htpasswd format is "admin:<hash>\n", extract the hash
+		if parts := strings.SplitN(strings.TrimSpace(string(existing)), ":", 2); len(parts) == 2 {
+			if bcrypt.CompareHashAndPassword([]byte(parts[1]), []byte(password)) == nil {
+				log.Printf("htpass-secret already has matching password, skipping update")
+				return nil
+			}
+		}
+	}
+
+	// Update the htpasswd data
 	if secret.Data == nil {
 		secret.Data = make(map[string][]byte)
 	}

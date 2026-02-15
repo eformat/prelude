@@ -17,7 +17,7 @@ The server requires a `--cluster-pool` flag to filter ClusterClaims by `spec.clu
 The server also accepts a `--cluster-lifetime` flag (default `2h`) to set the `spec.lifetime` on claimed ClusterClaims.
 
 ```bash
-./server --cluster-pool roadshow-lvtjv --cluster-lifetime 2h
+./server --cluster-pool prelude-lvtjv --cluster-lifetime 2h
 ```
 
 Phone numbers are sanitized to valid Kubernetes label values (alphanumeric, `-`, `_`, `.`).
@@ -98,6 +98,30 @@ The server also returns an `expiresAt` field (RFC 3339 UTC timestamp) in the cla
 
 If all the ClusterClaim's have a label "prelude: phone-number", and we cannot match the provided phone number, then display a nice message to the user - "All our clusters are in use at the moment, try again later".
 
+## Cluster Claimer
+
+A separate Go binary (`cluster-claimer/`) that automates initial cluster provisioning and claiming. A native Go implementation that uses a Kubernetes watch for efficient event-driven waiting.
+
+The cluster-claimer requires one flag:
+
+- `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
+
+```bash
+./cluster-claimer --cluster-pool prelude-lvtjv
+```
+
+ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist.
+
+It performs the following steps in order:
+
+1. **Watch for provisioned ClusterDeployments** — uses a Kubernetes watch on ClusterDeployments across all namespaces with the label `hive.openshift.io/clusterpool-name=<pool>`, waiting for the `Provisioned` condition to become `True`. Times out after 100 minutes.
+2. **Determine claims needed** — counts provisioned ClusterDeployments and existing ClusterClaims for the pool. If all deployments already have claims, it idles (no-op).
+3. **Create ClusterClaims** — creates ClusterClaim resources in the `cluster-pools` namespace named `prelude1`, `prelude2`, etc. with `spec.clusterPoolName` set and `system:masters` RBAC subject.
+
+After completing (or if no claims are needed), the process idles to keep its container alive in the pod.
+
+The cluster-claimer runs as a sidecar container in the same pod as the server and client, sharing the same kubeconfig volume. It runs asynchronously and independently of the other containers.
+
 ## Client Side
 
 A Next.js 15, Tailwind CSS web app styled to match the Red Hat design system (Red Hat Display/Text fonts, Red Hat brand colors, dark hero section).
@@ -122,30 +146,34 @@ Both env vars are set on the Go server container:
 ## Build
 
 ```bash
-make build-all        # Build both server and client
-make build-server     # Build Go server
-make build-client     # Build Next.js client
+make build-all              # Build server, cluster-claimer, and client
+make build-server           # Build Go server
+make build-cluster-claimer  # Build cluster-claimer
+make build-client           # Build Next.js client
 ```
 
 ## Run (development)
 
 ```bash
-make server-run       # Run Go server (port 8080)
-make client-run       # Run Next.js dev server (port 3000)
-make run-all          # Run both
+make server-run             # Run Go server (port 8080)
+make client-run             # Run Next.js dev server (port 3000)
+make cluster-claimer-run    # Run cluster-claimer
+make run-all                # Run server and client
 ```
 
 ## Container Images
 
 ```bash
-make podman-build-all       # Build both container images
-make podman-server-build    # Build server image (quay.io/eformat/prelude-server:latest)
-make podman-client-build    # Build client image (quay.io/eformat/prelude-client:latest)
+make podman-build-all              # Build all container images
+make podman-server-build           # Build server image (quay.io/eformat/prelude-server:latest)
+make podman-cluster-claimer-build  # Build cluster-claimer image (quay.io/eformat/prelude-cluster-claimer:latest)
+make podman-client-build           # Build client image (quay.io/eformat/prelude-client:latest)
 ```
 
 Run with containers:
 
 ```bash
-podman run --network host -p 8080:8080 -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-server:latest --cluster-pool roadshow-lvtjv
+podman run --network host -p 8080:8080 -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-server:latest --cluster-pool prelude-lvtjv
+podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-claimer:latest --cluster-pool prelude-lvtjv
 podman run --network host -p 3000:3000 quay.io/eformat/prelude-client:latest
 ```

@@ -1,6 +1,9 @@
 # Server
 server/server
 
+# Cluster Claimer
+cluster-claimer/cluster-claimer
+
 # Client
 client/node_modules/
 client/.next/

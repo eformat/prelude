@@ -51,6 +51,18 @@ spec:
             - name: kubeconfig
               mountPath: /etc/prelude/kubeconfig
               readOnly: true
+        - name: cluster-claimer
+          image: "{{ .Values.clusterClaimer.image.repository }}:{{ .Values.clusterClaimer.image.tag }}"
+          imagePullPolicy: {{ .Values.clusterClaimer.image.pullPolicy | default "Always" }}
+          env:
+            - name: KUBECONFIG
+              value: /etc/prelude/kubeconfig/kubeconfig
+            - name: CLUSTER_POOL
+              value: "{{ .Values.server.clusterPool }}"
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/prelude/kubeconfig
+              readOnly: true
       volumes:
         - name: kubeconfig
           secret:
