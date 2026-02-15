@@ -47,12 +47,18 @@ We can derive the spoke cluster ai console url by using the webConsoleURL as fol
 echo https://console-openshift-console.apps.roadshow-6kr2w.sandbox1763.opentlc.com |sed "s/console-openshift-console/data-science-gateway/"
 ```
 
-We also need to return the spoke cluster KUBECONFIG by doing the equivalent command line:
+We look up both the admin and user kubeconfig secrets from the spoke cluster. The admin kubeconfig secret name comes from `spec.clusterMetadata.adminKubeconfigSecretRef.name` on the ClusterDeployment. The user kubeconfig secret name is derived by replacing `-admin-kubeconfig` with `-user-kubeconfig`. For example:
+
+- Admin kubeconfig secret: `roadshow-q8jzk-txg6b-0-dqfqp-admin-kubeconfig`
+- User kubeconfig secret: `roadshow-q8jzk-txg6b-0-dqfqp-user-kubeconfig`
+
+The admin kubeconfig is used internally to update the htpasswd secret on the spoke cluster. The user kubeconfig is returned to the client.
 
 ```bash
 CLUSTER_NAME=roadshow-6kr2w
-KUBECONFIG_SECRET_NAME=$(oc -n $CLUSTER_NAME get clusterdeployments $CLUSTER_NAME -ojsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}')
-oc -n $CLUSTER_NAME get secret/$KUBECONFIG_SECRET_NAME -o template='{{ .data }}'
+ADMIN_KUBECONFIG_SECRET_NAME=$(oc -n $CLUSTER_NAME get clusterdeployments $CLUSTER_NAME -ojsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}')
+USER_KUBECONFIG_SECRET_NAME=$(echo $ADMIN_KUBECONFIG_SECRET_NAME | sed 's/-admin-kubeconfig$/-user-kubeconfig/')
+oc -n $CLUSTER_NAME get secret/$USER_KUBECONFIG_SECRET_NAME -o template='{{ .data }}'
 ```
 
 If no ClusterClaim exists with the label "prelude: phone-number" grab the first ClusterClaim that does not have that label and label it by doing the equivalent command line:

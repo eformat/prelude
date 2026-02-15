@@ -401,34 +401,31 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		return
 	}
 
-	// Get the kubeconfig secret
-	secret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, kubeconfigSecretName, metav1.GetOptions{})
+	// Get the admin kubeconfig secret (used for htpasswd update)
+	adminSecret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, kubeconfigSecretName, metav1.GetOptions{})
 	if err != nil {
-		log.Printf("Error getting kubeconfig secret %s/%s: %v", clusterName, kubeconfigSecretName, err)
-		http.Error(w, "Failed to get kubeconfig", http.StatusInternalServerError)
+		log.Printf("Error getting admin kubeconfig secret %s/%s: %v", clusterName, kubeconfigSecretName, err)
+		http.Error(w, "Failed to get admin kubeconfig", http.StatusInternalServerError)
 		return
 	}
 
-	kubeconfigData := ""
-	if raw, ok := secret.Data["kubeconfig"]; ok {
-		kubeconfigData = string(raw)
-	} else if raw, ok := secret.Data["raw-kubeconfig"]; ok {
-		kubeconfigData = string(raw)
-	} else {
-		// Fallback: try to find any key and base64 decode
-		for _, v := range secret.Data {
-			kubeconfigData = string(v)
-			break
-		}
+	adminKubeconfigData := extractKubeconfig(adminSecret)
+
+	// Derive user kubeconfig secret name from admin kubeconfig secret name
+	userKubeconfigSecretName := strings.Replace(kubeconfigSecretName, "-admin-kubeconfig", "-user-kubeconfig", 1)
+	log.Printf("Looking up user kubeconfig secret %s/%s", clusterName, userKubeconfigSecretName)
+
+	userSecret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, userKubeconfigSecretName, metav1.GetOptions{})
+	if err != nil {
+		log.Printf("Error getting user kubeconfig secret %s/%s: %v", clusterName, userKubeconfigSecretName, err)
+		http.Error(w, "Failed to get user kubeconfig", http.StatusInternalServerError)
+		return
 	}
 
-	// If the data looks base64 encoded, decode it
-	if decoded, err := base64.StdEncoding.DecodeString(kubeconfigData); err == nil && len(decoded) > 0 && strings.Contains(string(decoded), "apiVersion") {
-		kubeconfigData = string(decoded)
-	}
+	userKubeconfigData := extractKubeconfig(userSecret)
 
-	// Generate htpasswd entry and update the spoke cluster's htpass-secret
-	if err := updateHtpasswd(kubeconfigData, password); err != nil {
+	// Generate htpasswd entry and update the spoke cluster's htpass-secret (using admin kubeconfig)
+	if err := updateHtpasswd(adminKubeconfigData, password); err != nil {
 		log.Printf("Error updating htpasswd on spoke cluster %s: %v", clusterName, err)
 		http.Error(w, "Failed to set cluster admin password", http.StatusInternalServerError)
 		return
@@ -440,7 +437,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	resp := claimResponse{
 		WebConsoleURL: webConsoleURL,
 		AIConsoleURL:  aiConsoleURL,
-		Kubeconfig:    kubeconfigData,
+		Kubeconfig:    userKubeconfigData,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -463,6 +460,26 @@ func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 		return false
 	}
 	return name == poolName
+}
+
+// extractKubeconfig reads kubeconfig data from a Secret, handling common key names
+// and base64-encoded values.
+func extractKubeconfig(secret *corev1.Secret) string {
+	var data string
+	if raw, ok := secret.Data["kubeconfig"]; ok {
+		data = string(raw)
+	} else if raw, ok := secret.Data["raw-kubeconfig"]; ok {
+		data = string(raw)
+	} else {
+		for _, v := range secret.Data {
+			data = string(v)
+			break
+		}
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(data); err == nil && len(decoded) > 0 && strings.Contains(string(decoded), "apiVersion") {
+		data = string(decoded)
+	}
+	return data
 }
 
 // updateHtpasswd generates an htpasswd entry for "admin" with the given password
