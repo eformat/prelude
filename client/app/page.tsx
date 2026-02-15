@@ -202,8 +202,7 @@ export default function Home() {
             <p className="font-rh-text text-rh-gray-40 text-lg sm:text-xl leading-relaxed mb-12 max-w-2xl animate-fade-in-up"
                style={{ animationDelay: '0.1s' }}>
               Enter your phone number and choose an admin password to claim
-              a dedicated cluster environment. You&apos;ll receive your web console
-              URL and kubeconfig immediately.
+              a dedicated cluster environment. You&apos;ll receive your login details immediately.
             </p>
 
             {/* Phone Input Form */}
