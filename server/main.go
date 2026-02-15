@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -195,15 +196,7 @@ func main() {
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
 	log.Printf("Cluster lifetime: %s", *clusterLifetime)
 
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			kubeconfig = filepath.Join(home, ".kube", "config")
-		}
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, err := buildConfig()
 	if err != nil {
 		log.Fatalf("Error building kubeconfig: %v", err)
 	}
@@ -575,4 +568,25 @@ func secretDataKeys(s *corev1.Secret) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// buildConfig returns a Kubernetes REST config. It uses the KUBECONFIG env var
+// or ~/.kube/config if available, otherwise falls back to in-cluster config.
+func buildConfig() (*rest.Config, error) {
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			candidate := filepath.Join(home, ".kube", "config")
+			if _, err := os.Stat(candidate); err == nil {
+				kubeconfig = candidate
+			}
+		}
+	}
+	if kubeconfig != "" {
+		log.Printf("Using kubeconfig: %s", kubeconfig)
+		return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	}
+	log.Printf("Using in-cluster config")
+	return rest.InClusterConfig()
 }

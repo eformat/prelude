@@ -4,7 +4,7 @@ server:
     tag: latest
   clusterPool: ""
   clusterLifetime: "2h"
-  kubeconfigSecret: prelude-kubeconfig
+  kubeconfigSecret: ""
   recaptchaSiteKey: ""
   recaptchaSecretKey: ""
 
@@ -12,6 +12,7 @@ clusterClaimer:
   image:
     repository: quay.io/eformat/prelude-cluster-claimer
     tag: latest
+  clusterClaimLimit: "4"
 
 client:
   image:

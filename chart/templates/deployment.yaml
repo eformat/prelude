@@ -14,6 +14,7 @@ spec:
       labels:
         {{- include "prelude.selectorLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "prelude.fullname" . }}
       containers:
         - name: client
           image: "{{ .Values.client.image.repository }}:{{ .Values.client.image.tag }}"
@@ -33,8 +34,10 @@ spec:
           image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default "Always" }}
           env:
+            {{- if .Values.server.kubeconfigSecret }}
             - name: KUBECONFIG
               value: /etc/prelude/kubeconfig/kubeconfig
+            {{- end }}
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
             - name: CLUSTER_LIFETIME
@@ -47,23 +50,33 @@ spec:
             - name: RECAPTCHA_SECRET_KEY
               value: "{{ .Values.server.recaptchaSecretKey }}"
             {{- end }}
+          {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/prelude/kubeconfig
               readOnly: true
+          {{- end }}
         - name: cluster-claimer
           image: "{{ .Values.clusterClaimer.image.repository }}:{{ .Values.clusterClaimer.image.tag }}"
           imagePullPolicy: {{ .Values.clusterClaimer.image.pullPolicy | default "Always" }}
           env:
+            {{- if .Values.server.kubeconfigSecret }}
             - name: KUBECONFIG
               value: /etc/prelude/kubeconfig/kubeconfig
+            {{- end }}
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
+            - name: CLUSTER_CLAIM_LIMIT
+              value: "{{ .Values.clusterClaimer.clusterClaimLimit }}"
+          {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/prelude/kubeconfig
               readOnly: true
+          {{- end }}
+      {{- if .Values.server.kubeconfigSecret }}
       volumes:
         - name: kubeconfig
           secret:
             secretName: {{ .Values.server.kubeconfigSecret }}
+      {{- end }}

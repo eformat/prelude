@@ -102,20 +102,21 @@ If all the ClusterClaim's have a label "prelude: phone-number", and we cannot ma
 
 A separate Go binary (`cluster-claimer/`) that automates initial cluster provisioning and claiming. A native Go implementation that uses a Kubernetes watch for efficient event-driven waiting.
 
-The cluster-claimer requires one flag:
+The cluster-claimer accepts the following flags:
 
 - `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
+- `--cluster-claim-limit` (or `CLUSTER_CLAIM_LIMIT` env var) — maximum number of ClusterClaims to create (default `4`)
 
 ```bash
-./cluster-claimer --cluster-pool prelude-lvtjv
+./cluster-claimer --cluster-pool prelude-lvtjv --cluster-claim-limit 4
 ```
 
-ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist.
+ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the `--cluster-claim-limit`.
 
 It performs the following steps in order:
 
 1. **Watch for provisioned ClusterDeployments** — uses a Kubernetes watch on ClusterDeployments across all namespaces with the label `hive.openshift.io/clusterpool-name=<pool>`, waiting for the `Provisioned` condition to become `True`. Times out after 100 minutes.
-2. **Determine claims needed** — counts provisioned ClusterDeployments and existing ClusterClaims for the pool. If all deployments already have claims, it idles (no-op).
+2. **Determine claims needed** — counts provisioned ClusterDeployments and existing ClusterClaims for the pool, capped by the claim limit. If no new claims are needed, it idles (no-op).
 3. **Create ClusterClaims** — creates ClusterClaim resources in the `cluster-pools` namespace named `prelude1`, `prelude2`, etc. with `spec.clusterPoolName` set and `system:masters` RBAC subject.
 
 After completing (or if no claims are needed), the process idles to keep its container alive in the pod.

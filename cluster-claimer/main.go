@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -28,33 +31,30 @@ var (
 		Version:  "v1",
 		Resource: "clusterclaims",
 	}
-	clusterPoolGVR = schema.GroupVersionResource{
-		Group:    "hive.openshift.io",
-		Version:  "v1",
-		Resource: "clusterpools",
-	}
 	clusterPoolNamespace = "cluster-pools"
 )
 
 func main() {
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
+	clusterClaimLimitStr := flag.String("cluster-claim-limit", os.Getenv("CLUSTER_CLAIM_LIMIT"), "Maximum number of ClusterClaims to create (default 4)")
 	flag.Parse()
 
 	if *clusterPool == "" {
 		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
 	}
 
-	log.Printf("Cluster pool: %s", *clusterPool)
-
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			kubeconfig = filepath.Join(home, ".kube", "config")
+	claimLimit := 4
+	if *clusterClaimLimitStr != "" {
+		n, err := fmt.Sscanf(*clusterClaimLimitStr, "%d", &claimLimit)
+		if n != 1 || err != nil {
+			log.Fatalf("Invalid --cluster-claim-limit value: %s", *clusterClaimLimitStr)
 		}
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	log.Printf("Cluster pool: %s", *clusterPool)
+	log.Printf("Cluster claim limit: %d", claimLimit)
+
+	config, err := buildConfig()
 	if err != nil {
 		log.Fatalf("Error building kubeconfig: %v", err)
 	}
@@ -74,13 +74,15 @@ func main() {
 	}
 
 	// Step 2: Determine how many claims are needed
-	needed, err := claimsNeeded(ctx, dynClient, pool)
+	needed, err := claimsNeeded(ctx, dynClient, pool, claimLimit)
 	if err != nil {
 		log.Fatalf("Error determining claims needed: %v", err)
 	}
 	if needed == 0 {
 		log.Printf("All provisioned ClusterDeployments already have ClusterClaims, nothing to do")
-		select {}
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
 	}
 
 	// Step 3: Create ClusterClaims with generated names (prelude1, prelude2, ...)
@@ -102,12 +104,15 @@ func main() {
 	}
 
 	log.Printf("Cluster claimer completed successfully, created %d claim(s)", created)
-	select {} // idle to keep container alive
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
 }
 
 // claimsNeeded returns how many new ClusterClaims are needed by comparing
-// the number of provisioned ClusterDeployments to existing ClusterClaims for the pool.
-func claimsNeeded(ctx context.Context, dynClient dynamic.Interface, pool string) (int, error) {
+// the number of provisioned ClusterDeployments to existing ClusterClaims for the pool,
+// capped by the cluster claim limit.
+func claimsNeeded(ctx context.Context, dynClient dynamic.Interface, pool string, claimLimit int) (int, error) {
 	provisionedCount, err := countProvisionedDeployments(ctx, dynClient, pool)
 	if err != nil {
 		return 0, err
@@ -118,9 +123,15 @@ func claimsNeeded(ctx context.Context, dynClient dynamic.Interface, pool string)
 		return 0, err
 	}
 
-	log.Printf("Provisioned ClusterDeployments: %d, existing ClusterClaims: %d", provisionedCount, claimCount)
+	log.Printf("Provisioned ClusterDeployments: %d, existing ClusterClaims: %d, claim limit: %d", provisionedCount, claimCount, claimLimit)
 
-	needed := provisionedCount - claimCount
+	// Cap the target number of claims at the limit
+	target := provisionedCount
+	if target > claimLimit {
+		target = claimLimit
+	}
+
+	needed := target - claimCount
 	if needed < 0 {
 		needed = 0
 	}
@@ -305,4 +316,25 @@ func createClusterClaim(ctx context.Context, dynClient dynamic.Interface, name, 
 	}
 	log.Printf("ClusterClaim %s created successfully", name)
 	return nil
+}
+
+// buildConfig returns a Kubernetes REST config. It uses the KUBECONFIG env var
+// or ~/.kube/config if available, otherwise falls back to in-cluster config.
+func buildConfig() (*rest.Config, error) {
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			candidate := filepath.Join(home, ".kube", "config")
+			if _, err := os.Stat(candidate); err == nil {
+				kubeconfig = candidate
+			}
+		}
+	}
+	if kubeconfig != "" {
+		log.Printf("Using kubeconfig: %s", kubeconfig)
+		return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	}
+	log.Printf("Using in-cluster config")
+	return rest.InClusterConfig()
 }
