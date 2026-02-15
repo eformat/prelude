@@ -39,6 +39,12 @@ CLUSTER_NAME=roadshow-6kr2w
 oc -n $CLUSTER_NAME get clusterdeployment $CLUSTER_NAME -o template='{{ index .status.webConsoleURL }}'
 ```
 
+We can derive the spoke cluster ai console url by using the webConsoleURL as follows:
+
+```bash
+echo https://console-openshift-console.apps.roadshow-6kr2w.sandbox1763.opentlc.com |sed "s/console-openshift-console/data-science-gateway/"
+```
+
 We also need to return the spoke cluster KUBECONFIG by doing the equivalent command line:
 
 ```bash

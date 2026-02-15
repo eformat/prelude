@@ -4,6 +4,7 @@ import { useState } from "react";
 
 interface ClusterInfo {
   webConsoleURL: string;
+  aiConsoleURL: string;
   kubeconfig: string;
 }
 
@@ -319,7 +320,7 @@ export default function Home() {
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
-              {/* Web Console URL Card */}
+              {/* AI Console URL Card */}
               <div
                 className="bg-white border border-rh-gray-20 animate-fade-in-up"
                 style={{ animationDelay: '0.1s' }}
@@ -328,7 +329,45 @@ export default function Home() {
                   <div className="flex items-center gap-3">
                     <div className="w-2 h-2 rounded-full bg-rh-red-50 animate-pulse-red" />
                     <h3 className="font-rh-display text-rh-gray-95 text-base font-bold">
-                      Web Console URL
+                      AI Console URL
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(cluster.aiConsoleURL, "aiurl")}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-rh-text font-medium text-rh-gray-60 border border-rh-gray-20 hover:border-rh-gray-50 hover:text-rh-gray-95 transition-colors"
+                  >
+                    {copied === "aiurl" ? <CheckIcon /> : <CopyIcon />}
+                    <span>{copied === "aiurl" ? "Copied" : "Copy"}</span>
+                  </button>
+                </div>
+                <div className="px-6 py-5">
+                  <a
+                    href={cluster.aiConsoleURL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group inline-flex items-center gap-2 font-rh-text text-rh-red-50 hover:text-rh-red-60 text-base break-all transition-colors"
+                  >
+                    <span className="underline underline-offset-2 decoration-rh-red-50/40 group-hover:decoration-rh-red-60">
+                      {cluster.aiConsoleURL}
+                    </span>
+                    <ExternalIcon />
+                  </a>
+                  <p className="mt-3 font-rh-text text-sm text-rh-gray-60">
+                    Access Red Hat OpenShift AI.<br /><br />Use the <span className="font-bold text-rh-gray-95">admin</span> user and your password to login. It may take a moment for the cluster to be ready.
+                  </p>
+                </div>
+              </div>
+
+              {/* OpenShift Console URL Card */}
+              <div
+                className="bg-white border border-rh-gray-20 animate-fade-in-up"
+                style={{ animationDelay: '0.15s' }}
+              >
+                <div className="border-b border-rh-gray-20 px-6 py-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-rh-red-50 animate-pulse-red" />
+                    <h3 className="font-rh-display text-rh-gray-95 text-base font-bold">
+                      OpenShift Console URL
                     </h3>
                   </div>
                   <button
@@ -352,7 +391,7 @@ export default function Home() {
                     <ExternalIcon />
                   </a>
                   <p className="mt-3 font-rh-text text-sm text-rh-gray-60">
-                    Use the <span className="font-bold text-rh-gray-95">admin</span> user and your password to login. It may take a moment for the cluster to be ready.
+                    Access Red Hat OpenShift cluster.<br /><br />Use the <span className="font-bold text-rh-gray-95">admin</span> user and your password to login. It may take a moment for the cluster to be ready.
                   </p>
                 </div>
               </div>

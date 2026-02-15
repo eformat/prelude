@@ -61,6 +61,7 @@ func sanitizePhone(phone string) string {
 
 type claimResponse struct {
 	WebConsoleURL string `json:"webConsoleURL"`
+	AIConsoleURL  string `json:"aiConsoleURL"`
 	Kubeconfig    string `json:"kubeconfig"`
 }
 
@@ -278,8 +279,12 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		return
 	}
 
+	// Derive AI console URL by replacing console-openshift-console with data-science-gateway
+	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1)
+
 	resp := claimResponse{
 		WebConsoleURL: webConsoleURL,
+		AIConsoleURL:  aiConsoleURL,
 		Kubeconfig:    kubeconfigData,
 	}
 
