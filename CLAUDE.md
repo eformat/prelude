@@ -17,7 +17,7 @@ The server requires a `--cluster-pool` flag to filter ClusterClaims by `spec.clu
 The server also accepts a `--cluster-lifetime` flag (default `2h`) to set the `spec.lifetime` on claimed ClusterClaims.
 
 ```bash
-./server --cluster-pool prelude-lvtjv --cluster-lifetime 2h
+./server --cluster-pool prelude-q8jzk --cluster-lifetime 2h
 ```
 
 Phone numbers are sanitized to valid Kubernetes label values (alphanumeric, `-`, `_`, `.`).
@@ -39,25 +39,25 @@ If the label "prelude: phone-number" exists on an eligible ClusterClaim - then r
 We can get the spoke cluster web console url by doing the equivalent command line:
 
 ```bash
-CLUSTER_NAME=roadshow-6kr2w
+CLUSTER_NAME=prelude-q8jzk
 oc -n $CLUSTER_NAME get clusterdeployment $CLUSTER_NAME -o template='{{ index .status.webConsoleURL }}'
 ```
 
 We can derive the spoke cluster ai console url by using the webConsoleURL as follows:
 
 ```bash
-echo https://console-openshift-console.apps.roadshow-6kr2w.sandbox1763.opentlc.com |sed "s/console-openshift-console/data-science-gateway/"
+echo https://console-openshift-console.apps.prelude-q8jzk.sandbox1763.opentlc.com |sed "s/console-openshift-console/data-science-gateway/"
 ```
 
 We look up both the admin and user kubeconfig secrets from the spoke cluster. The admin kubeconfig secret name comes from `spec.clusterMetadata.adminKubeconfigSecretRef.name` on the ClusterDeployment. The user kubeconfig secret name is derived by replacing `-admin-kubeconfig` with `-user-kubeconfig`. For example:
 
-- Admin kubeconfig secret: `roadshow-q8jzk-txg6b-0-dqfqp-admin-kubeconfig`
-- User kubeconfig secret: `roadshow-q8jzk-txg6b-0-dqfqp-user-kubeconfig`
+- Admin kubeconfig secret: `prelude-q8jzk-txg6b-0-dqfqp-admin-kubeconfig`
+- User kubeconfig secret: `prelude-q8jzk-txg6b-0-dqfqp-user-kubeconfig`
 
 The admin kubeconfig is used internally to update the htpasswd secret on the spoke cluster. The user kubeconfig is returned to the client.
 
 ```bash
-CLUSTER_NAME=roadshow-6kr2w
+CLUSTER_NAME=prelude-q8jzk
 ADMIN_KUBECONFIG_SECRET_NAME=$(oc -n $CLUSTER_NAME get clusterdeployments $CLUSTER_NAME -ojsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}')
 USER_KUBECONFIG_SECRET_NAME=$(echo $ADMIN_KUBECONFIG_SECRET_NAME | sed 's/-admin-kubeconfig$/-user-kubeconfig/')
 oc -n $CLUSTER_NAME get secret/$USER_KUBECONFIG_SECRET_NAME -o template='{{ .data }}'
@@ -67,7 +67,7 @@ If no ClusterClaim exists with the label "prelude: phone-number" grab the first 
 
 ```bash
 CLUSTER_CLAIM_NAME=road1
-PHONE_NUMBER=61-435-065-758
+PHONE_NUMBER=61-435-999-768
 oc -n cluster-pools label clusterclaim.hive.openshift.io $CLUSTER_CLAIM_NAME prelude=$PHONE_NUMBER
 ```
 
@@ -110,7 +110,7 @@ The cluster-claimer accepts the following flags:
 - `--cluster-claim-limit` (or `CLUSTER_CLAIM_LIMIT` env var) — maximum number of ClusterClaims to create (default `4`)
 
 ```bash
-./cluster-claimer --cluster-pool prelude-lvtjv --cluster-claim-limit 4
+./cluster-claimer --cluster-pool prelude-q8jzk --cluster-claim-limit 4
 ```
 
 ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the `--cluster-claim-limit`.
@@ -134,7 +134,7 @@ The cluster-authenticator accepts the following flags:
 - `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
 
 ```bash
-./cluster-authenticator --cluster-pool prelude-lvtjv
+./cluster-authenticator --cluster-pool prelude-q8jzk
 ```
 
 It watches ClusterClaims for the pool and processes each bound claim (one with `spec.namespace` set) that does not yet have the `prelude-auth=done` label. Each claim is processed exactly once. It performs the following steps:
@@ -225,8 +225,8 @@ make podman-client-build                 # Build client image (quay.io/eformat/p
 Run with containers:
 
 ```bash
-podman run --network host -p 8080:8080 -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-server:latest --cluster-pool prelude-lvtjv
-podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-claimer:latest --cluster-pool prelude-lvtjv
-podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-authenticator:latest --cluster-pool prelude-lvtjv
+podman run --network host -p 8080:8080 -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-server:latest --cluster-pool prelude-q8jzk
+podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-claimer:latest --cluster-pool prelude-q8jzk
+podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-authenticator:latest --cluster-pool prelude-q8jzk
 podman run --network host -p 3000:3000 quay.io/eformat/prelude-client:latest
 ```
