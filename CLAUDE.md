@@ -113,15 +113,15 @@ The cluster-claimer accepts the following flags:
 
 ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the `--cluster-claim-limit`.
 
-It performs the following steps in order:
+It performs the following steps:
 
-1. **Watch for provisioned ClusterDeployments** — uses a Kubernetes watch on ClusterDeployments across all namespaces with the label `hive.openshift.io/clusterpool-name=<pool>`, waiting for the `Provisioned` condition to become `True`. Times out after 100 minutes.
-2. **Determine claims needed** — counts provisioned ClusterDeployments and existing ClusterClaims for the pool, capped by the claim limit. If no new claims are needed, it idles (no-op).
-3. **Create ClusterClaims** — creates ClusterClaim resources in the `cluster-pools` namespace named `prelude1`, `prelude2`, etc. with `spec.clusterPoolName` set and `system:masters` RBAC subject.
+1. **Wait for provisioned ClusterDeployments** — uses a Kubernetes watch on ClusterDeployments across all namespaces with the label `hive.openshift.io/clusterpool-name=<pool>`, waiting for the `Provisioned` condition to become `True`. Times out after 100 minutes.
+2. **Reconciliation loop** — continuously watches ClusterDeployments and reconciles whenever a change is detected:
+   - Counts provisioned ClusterDeployments and existing ClusterClaims for the pool.
+   - If new claims are needed (up to `--cluster-claim-limit`), creates ClusterClaim resources named `prelude1`, `prelude2`, etc. with `spec.clusterPoolName` set and `system:masters` RBAC subject.
+   - Watches for further ClusterDeployment changes (30s watch timeout) and re-reconciles when new deployments are added or become provisioned.
 
-After completing (or if no claims are needed), the process idles to keep its container alive in the pod.
-
-The cluster-claimer runs as a sidecar container in the same pod as the server and client, sharing the same kubeconfig volume. It runs asynchronously and independently of the other containers.
+The cluster-claimer runs as a sidecar container in the same pod as the server and client, sharing the same kubeconfig volume. It runs asynchronously and independently of the other containers. It shuts down cleanly on SIGINT/SIGTERM.
 
 ## Client Side
 

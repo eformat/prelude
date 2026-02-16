@@ -64,32 +64,100 @@ func main() {
 		log.Fatalf("Error creating dynamic client: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	pool := *clusterPool
 
-	// Step 1: Watch/wait for ClusterDeployments to be provisioned
+	// Handle shutdown signals
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		log.Printf("Received shutdown signal")
+		cancel()
+	}()
+
+	// Step 1: Wait for at least one provisioned ClusterDeployment
 	log.Printf("Waiting for cluster pool %s to be provisioned...", pool)
 	if err := waitForProvisioned(ctx, dynClient, pool); err != nil {
 		log.Fatalf("Error waiting for provisioned: %v", err)
 	}
 
-	// Step 2: Determine how many claims are needed
+	// Step 2: Reconcile loop — watch for changes and create claims as needed
+	reconcile(ctx, dynClient, pool, claimLimit)
+	log.Printf("Cluster claimer shutting down")
+}
+
+// reconcile continuously watches ClusterDeployments and creates ClusterClaims
+// as new deployments become provisioned, up to the claim limit.
+func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, claimLimit int) {
+	labelSelector := fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool)
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Check and create any needed claims
+		created := createNeededClaims(ctx, dynClient, pool, claimLimit)
+		if created > 0 {
+			log.Printf("Reconcile: created %d claim(s)", created)
+		}
+
+		// Watch for ClusterDeployment changes, then re-reconcile
+		var timeoutSecs int64 = 30
+		list, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+		if err != nil {
+			log.Printf("Error listing ClusterDeployments: %v", err)
+			sleepOrDone(ctx, 10*time.Second)
+			continue
+		}
+
+		watcher, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").Watch(ctx, metav1.ListOptions{
+			LabelSelector:   labelSelector,
+			TimeoutSeconds:  &timeoutSecs,
+			ResourceVersion: list.GetResourceVersion(),
+		})
+		if err != nil {
+			log.Printf("Error watching ClusterDeployments: %v", err)
+			sleepOrDone(ctx, 10*time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			if event.Type == watch.Added || event.Type == watch.Modified {
+				if u, ok := event.Object.(*unstructured.Unstructured); ok {
+					if isProvisioned(u.Object) {
+						log.Printf("ClusterDeployment %s/%s changed, re-reconciling", u.GetNamespace(), u.GetName())
+						break
+					}
+				}
+			}
+		}
+		watcher.Stop()
+	}
+}
+
+// createNeededClaims checks how many claims are needed and creates them.
+// Returns the number of claims created.
+func createNeededClaims(ctx context.Context, dynClient dynamic.Interface, pool string, claimLimit int) int {
 	needed, err := claimsNeeded(ctx, dynClient, pool, claimLimit)
 	if err != nil {
-		log.Fatalf("Error determining claims needed: %v", err)
+		log.Printf("Error determining claims needed: %v", err)
+		return 0
 	}
 	if needed == 0 {
-		log.Printf("All provisioned ClusterDeployments already have ClusterClaims, nothing to do")
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
+		return 0
 	}
 
-	// Step 3: Create ClusterClaims with generated names (prelude1, prelude2, ...)
 	existingNames, err := existingClaimNames(ctx, dynClient, pool)
 	if err != nil {
-		log.Fatalf("Error listing existing claim names: %v", err)
+		log.Printf("Error listing existing claim names: %v", err)
+		return 0
 	}
+
 	created := 0
 	for i := 1; created < needed; i++ {
 		name := fmt.Sprintf("prelude%d", i)
@@ -98,15 +166,20 @@ func main() {
 		}
 		log.Printf("Creating ClusterClaim %s for pool %s", name, pool)
 		if err := createClusterClaim(ctx, dynClient, name, pool); err != nil {
-			log.Fatalf("Error creating cluster claim: %v", err)
+			log.Printf("Error creating cluster claim: %v", err)
+			return created
 		}
 		created++
 	}
+	return created
+}
 
-	log.Printf("Cluster claimer completed successfully, created %d claim(s)", created)
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+// sleepOrDone sleeps for the given duration or returns early if the context is cancelled.
+func sleepOrDone(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
 }
 
 // claimsNeeded returns how many new ClusterClaims are needed by comparing
