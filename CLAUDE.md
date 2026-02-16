@@ -147,11 +147,11 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
    oc adm wait-for-stable-cluster --minimum-stable-period=120s --timeout=30m
    ```
 
-3. **Regenerate system:admin kubeconfig** — generates an RSA 4096 key pair, submits a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client` signer) on the spoke cluster with `CN=system:admin`, approves it, extracts the signed certificate, retrieves the CA cert from the spoke API server TLS connection, and builds a kubeconfig YAML with embedded certs. Equivalent to `regenerate-kubeconfig.sh`.
+3. **Regenerate system:admin kubeconfig** — generates an RSA 4096 key pair, submits a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client` signer) on the spoke cluster with `CN=system:admin`, approves it, extracts the signed certificate, retrieves the CA cert from the spoke API server TLS connection, and builds a kubeconfig YAML with embedded certs.
 
 4. **Update admin kubeconfig secret on hub** — updates the admin kubeconfig secret (both `kubeconfig` and `raw-kubeconfig` keys) with the regenerated kubeconfig.
 
-5. **Regenerate admin user kubeconfig** — same CSR flow as step 3 but with `CN=admin`. Equivalent to `regenerate-kubeconfig-user.sh`.
+5. **Regenerate admin user kubeconfig** — same CSR flow as step 3 but with `CN=admin`.
 
 6. **Create/update user kubeconfig secret on hub** — derives the user kubeconfig secret name (replacing `-admin-kubeconfig` with `-user-kubeconfig`), creates or updates the secret with the regenerated user kubeconfig.
 
