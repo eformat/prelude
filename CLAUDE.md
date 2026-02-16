@@ -175,7 +175,7 @@ The server only considers ClusterClaims with the `prelude-auth=done` label when 
 
 A Next.js 15, Tailwind CSS web app styled to match the Red Hat design system (Red Hat Display/Text fonts, Red Hat brand colors, dark hero section).
 
-A user enters their phone number and an admin password and receives back a spoke cluster webConsoleURL, KUBECONFIG, and expiry time.
+A user enters their phone number and an admin password and receives back a spoke cluster webConsoleURL, ai app console url, KUBECONFIG, and expiry time.
 
 The phone number is validated client-side (7-15 digits). The password field has a reveal/hide toggle.
 
@@ -185,7 +185,7 @@ The `/api/claim` call is made via a Next.js Server Action (not exposed to the br
 
 ## reCAPTCHA
 
-Google reCAPTCHA v3 protects the `/api/claim` endpoint from bots. It is optional -- if the env vars are not set, verification is skipped.
+Google reCAPTCHA v3 protects the app endpoints from bots. It is optional -- if the env vars are not set, verification is skipped.
 
 Both env vars are set on the Go server container:
 
