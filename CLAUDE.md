@@ -32,7 +32,9 @@ oc get clusterclaim.hive.openshift.io -n cluster-pools
 
 Only ClusterClaims matching the specified `--cluster-pool` are considered. The pool is identified by the `spec.clusterPoolName` field on the ClusterClaim.
 
-If the label "prelude: phone-number" exists on the spoke clusterclaim - then return that cluster's web console URL.
+Only ClusterClaims with the label `prelude-auth=done` are eligible for assignment to users. This label is set by the cluster-authenticator after it has successfully prepared the cluster's kubeconfig credentials and spoke resources.
+
+If the label "prelude: phone-number" exists on an eligible ClusterClaim - then return that cluster's web console URL.
 
 We can get the spoke cluster web console url by doing the equivalent command line:
 
@@ -123,6 +125,52 @@ It performs the following steps:
 
 The cluster-claimer runs as a sidecar container in the same pod as the server and client, sharing the same kubeconfig volume. It runs asynchronously and independently of the other containers. It shuts down cleanly on SIGINT/SIGTERM.
 
+## Cluster Authenticator
+
+A separate Go binary (`cluster-authenticator/`) that automates the preparation of kubeconfig credentials once clusters are claimed. A native Go implementation that uses a Kubernetes watch for efficient event-driven processing.
+
+The cluster-authenticator accepts the following flags:
+
+- `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
+
+```bash
+./cluster-authenticator --cluster-pool prelude-lvtjv
+```
+
+It watches ClusterClaims for the pool and processes each bound claim (one with `spec.namespace` set) that does not yet have the `prelude-auth=done` label. Each claim is processed exactly once. It performs the following steps:
+
+1. **Get spoke admin kubeconfig** — retrieves the ClusterDeployment from `spec.namespace`, extracts `spec.clusterMetadata.adminKubeconfigSecretRef.name`, and builds a spoke REST client from the admin kubeconfig secret on the hub.
+
+2. **Wait for stable cluster** — checks all ClusterOperators on the spoke cluster (`config.openshift.io/v1 clusteroperators`) for `Available=True`, `Progressing=False`, `Degraded=False`. All conditions must be stable for 120 seconds. Times out after 30 minutes. Equivalent to:
+
+   ```bash
+   oc adm wait-for-stable-cluster --minimum-stable-period=120s --timeout=30m
+   ```
+
+3. **Regenerate system:admin kubeconfig** — generates an RSA 4096 key pair, submits a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client` signer) on the spoke cluster with `CN=system:admin`, approves it, extracts the signed certificate, retrieves the CA cert from the spoke API server TLS connection, and builds a kubeconfig YAML with embedded certs. Equivalent to `regenerate-kubeconfig.sh`.
+
+4. **Update admin kubeconfig secret on hub** — updates the admin kubeconfig secret (both `kubeconfig` and `raw-kubeconfig` keys) with the regenerated kubeconfig.
+
+5. **Regenerate admin user kubeconfig** — same CSR flow as step 3 but with `CN=admin`. Equivalent to `regenerate-kubeconfig-user.sh`.
+
+6. **Create/update user kubeconfig secret on hub** — derives the user kubeconfig secret name (replacing `-admin-kubeconfig` with `-user-kubeconfig`), creates or updates the secret with the regenerated user kubeconfig.
+
+7. **Create spoke resources** — using the new system:admin kubeconfig, creates on the spoke cluster (if they don't already exist):
+
+   ```bash
+   oc create configmap prelude -n openshift-config
+   oc create secret generic htpass-secret \
+       --from-literal=htpasswd="" \
+       -n openshift-config
+   ```
+
+8. **Label claim as authenticated** — sets `prelude-auth=done` on the ClusterClaim, marking it as ready for users.
+
+The cluster-authenticator runs as a sidecar container in the same pod as the server, client, and cluster-claimer, sharing the same kubeconfig volume. It runs asynchronously and independently. It shuts down cleanly on SIGINT/SIGTERM.
+
+The server only considers ClusterClaims with the `prelude-auth=done` label when assigning clusters to users, ensuring users never receive a cluster that is still being prepared.
+
+
 ## Client Side
 
 A Next.js 15, Tailwind CSS web app styled to match the Red Hat design system (Red Hat Display/Text fonts, Red Hat brand colors, dark hero section).
@@ -147,28 +195,31 @@ Both env vars are set on the Go server container:
 ## Build
 
 ```bash
-make build-all              # Build server, cluster-claimer, and client
-make build-server           # Build Go server
-make build-cluster-claimer  # Build cluster-claimer
-make build-client           # Build Next.js client
+make build-all                    # Build server, cluster-claimer, cluster-authenticator, and client
+make build-server                 # Build Go server
+make build-cluster-claimer        # Build cluster-claimer
+make build-cluster-authenticator  # Build cluster-authenticator
+make build-client                 # Build Next.js client
 ```
 
 ## Run (development)
 
 ```bash
-make server-run             # Run Go server (port 8080)
-make client-run             # Run Next.js dev server (port 3000)
-make cluster-claimer-run    # Run cluster-claimer
-make run-all                # Run server and client
+make server-run                 # Run Go server (port 8080)
+make client-run                 # Run Next.js dev server (port 3000)
+make cluster-claimer-run        # Run cluster-claimer
+make cluster-authenticator-run  # Run cluster-authenticator
+make run-all                    # Run server and client
 ```
 
 ## Container Images
 
 ```bash
-make podman-build-all              # Build all container images
-make podman-server-build           # Build server image (quay.io/eformat/prelude-server:latest)
-make podman-cluster-claimer-build  # Build cluster-claimer image (quay.io/eformat/prelude-cluster-claimer:latest)
-make podman-client-build           # Build client image (quay.io/eformat/prelude-client:latest)
+make podman-build-all                    # Build all container images
+make podman-server-build                 # Build server image (quay.io/eformat/prelude-server:latest)
+make podman-cluster-claimer-build        # Build cluster-claimer image (quay.io/eformat/prelude-cluster-claimer:latest)
+make podman-cluster-authenticator-build  # Build cluster-authenticator image (quay.io/eformat/prelude-cluster-authenticator:latest)
+make podman-client-build                 # Build client image (quay.io/eformat/prelude-client:latest)
 ```
 
 Run with containers:
@@ -176,5 +227,6 @@ Run with containers:
 ```bash
 podman run --network host -p 8080:8080 -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-server:latest --cluster-pool prelude-lvtjv
 podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-claimer:latest --cluster-pool prelude-lvtjv
+podman run --network host -v ~/.kube/config:/root/.kube/config:Z quay.io/eformat/prelude-cluster-authenticator:latest --cluster-pool prelude-lvtjv
 podman run --network host -p 3000:3000 quay.io/eformat/prelude-client:latest
 ```

@@ -74,6 +74,22 @@ spec:
               mountPath: /etc/prelude/kubeconfig
               readOnly: true
           {{- end }}
+        - name: cluster-authenticator
+          image: "{{ .Values.clusterAuthenticator.image.repository }}:{{ .Values.clusterAuthenticator.image.tag }}"
+          imagePullPolicy: {{ .Values.clusterAuthenticator.image.pullPolicy | default "Always" }}
+          env:
+            {{- if .Values.server.kubeconfigSecret }}
+            - name: KUBECONFIG
+              value: /etc/prelude/kubeconfig/kubeconfig
+            {{- end }}
+            - name: CLUSTER_POOL
+              value: "{{ .Values.server.clusterPool }}"
+          {{- if .Values.server.kubeconfigSecret }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/prelude/kubeconfig
+              readOnly: true
+          {{- end }}
       {{- if .Values.server.kubeconfigSecret }}
       volumes:
         - name: kubeconfig

@@ -4,6 +4,9 @@ server/server
 # Cluster Claimer
 cluster-claimer/cluster-claimer
 
+# Cluster Authenticator
+cluster-authenticator/cluster-authenticator
+
 # Client
 client/node_modules/
 client/.next/

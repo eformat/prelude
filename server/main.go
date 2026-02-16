@@ -287,12 +287,16 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	found := false
 
 	// Check if any ClusterClaim already has this phone number
+	// Only consider claims that have been authenticated (prelude-auth=done)
 	for _, claim := range claims.Items {
 		if !claimMatchesPool(claim.Object, clusterPool) {
 			continue
 		}
 		labels := claim.GetLabels()
-		if labels != nil && labels["prelude"] == phone {
+		if labels == nil || labels["prelude-auth"] != "done" {
+			continue
+		}
+		if labels["prelude"] == phone {
 			claimName = claim.GetName()
 			spec, ok := claim.Object["spec"].(map[string]interface{})
 			if ok {
@@ -314,14 +318,17 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		}
 	}
 
-	// If not found, grab the first unlabeled ClusterClaim and label it
+	// If not found, grab the first authenticated but unclaimed ClusterClaim and label it
 	if !found {
 		for _, claim := range claims.Items {
 			if !claimMatchesPool(claim.Object, clusterPool) {
 				continue
 			}
 			labels := claim.GetLabels()
-			if labels == nil || labels["prelude"] == "" {
+			if labels == nil || labels["prelude-auth"] != "done" {
+				continue
+			}
+			if labels["prelude"] == "" {
 				claimName = claim.GetName()
 				spec, ok := claim.Object["spec"].(map[string]interface{})
 				if ok {
@@ -332,9 +339,6 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				}
 
 				// Label the claim with the phone number
-				if labels == nil {
-					labels = make(map[string]string)
-				}
 				labels["prelude"] = phone
 				claim.SetLabels(labels)
 

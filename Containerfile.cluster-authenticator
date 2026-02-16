@@ -1,0 +1,15 @@
+FROM registry.redhat.io/ubi10/go-toolset:10.1 AS builder
+
+WORKDIR /opt/app-root/src
+
+COPY cluster-authenticator/go.mod cluster-authenticator/go.sum ./
+RUN go mod download
+
+COPY cluster-authenticator/main.go ./
+RUN CGO_ENABLED=0 go build -o /opt/app-root/cluster-authenticator .
+
+FROM registry.redhat.io/ubi10/ubi-minimal:latest
+
+COPY --from=builder /opt/app-root/cluster-authenticator /usr/local/bin/cluster-authenticator
+
+ENTRYPOINT ["cluster-authenticator"]

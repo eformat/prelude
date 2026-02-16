@@ -10,7 +10,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["hive.openshift.io"]
     resources: ["clusterclaims"]
-    verbs: ["get", "list", "create", "update"]
+    verbs: ["get", "list", "watch", "create", "update"]
   - apiGroups: ["hive.openshift.io"]
     resources: ["clusterpools"]
     verbs: ["get", "patch"]
