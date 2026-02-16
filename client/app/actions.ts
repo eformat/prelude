@@ -17,6 +17,54 @@ interface ClaimError {
   error: string;
 }
 
+export interface AdminClaimInfo {
+  name: string;
+  pool: string;
+  phone: string;
+  authenticated: boolean;
+  namespace: string;
+  age: string;
+}
+
+export interface AdminDeploymentInfo {
+  name: string;
+  namespace: string;
+  platform: string;
+  region: string;
+  version: string;
+  provisionStatus: string;
+  powerState: string;
+  age: string;
+}
+
+export interface AdminData {
+  clusterClaims: AdminClaimInfo[];
+  clusterDeployments: AdminDeploymentInfo[];
+}
+
+interface AdminResult {
+  success: true;
+  data: AdminData;
+}
+
+interface AdminError {
+  success: false;
+  error: string;
+}
+
+export async function getAdminData(): Promise<AdminResult | AdminError> {
+  try {
+    const res = await fetch(`${API_URL}/api/admin`);
+    if (!res.ok) {
+      return { success: false, error: "Failed to fetch admin data" };
+    }
+    const data = await res.json();
+    return { success: true, data };
+  } catch {
+    return { success: false, error: "Failed to connect to cluster service" };
+  }
+}
+
 export async function claimCluster(
   phone: string,
   password: string,

@@ -183,6 +183,45 @@ These are displayed in the web app with easy copy and download buttons displayed
 
 The `/api/claim` call is made via a Next.js Server Action (not exposed to the browser). The client proxies `/api/config` to the Go server at `http://0.0.0.0:8080` via Next.js rewrites. The API URL is configurable via the `API_URL` environment variable.
 
+### Admin page
+
+The admin page "/admin" shows the results of the following example queries.
+
+```bash
+# search claimed clusters label values
+oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude -o json | jq '.items[]' | jq '.metadata.["name"], .metadata.labels["prelude"], .metadata.labels["prelude-auth"]'
+
+"prelude1"
+"61-438-065-578"
+"done"
+```
+
+```bash
+# search for clusters that are ready or already claimed
+oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude-auth
+
+NAME       POOL            PENDING          CLUSTERNAMESPACE      CLUSTERRUNNING   AGE
+prelude1   prelude-lvtjv   ClusterClaimed   prelude-lvtjv-hz2qp   Running          67m
+```
+
+```bash
+# search for clusters that are claimed
+oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude-auth -l prelude
+
+NAME       POOL            PENDING          CLUSTERNAMESPACE      CLUSTERRUNNING   AGE
+prelude1   prelude-lvtjv   ClusterClaimed   prelude-lvtjv-hz2qp   Running          67m
+```
+
+```bash
+# search for all cluster deployments
+oc get clusterdeployments -l hive.openshift.io/clusterpool-name=prelude-lvtjv -A
+
+NAMESPACE             NAME                  INFRAID                     PLATFORM   REGION      VERSION   CLUSTERTYPE   PROVISIONSTATUS   POWERSTATE   AGE
+prelude-lvtjv-7xkvp   prelude-lvtjv-7xkvp   prelude-lvtjv-7xkvp-wgrg6   aws        us-east-2                           Provisioning                   20m
+prelude-lvtjv-hz2qp   prelude-lvtjv-hz2qp   prelude-lvtjv-hz2qp-v7qwp   aws        us-east-2   4.20.14                 Provisioned       Running      113m
+prelude-lvtjv-k2qff   prelude-lvtjv-k2qff   prelude-lvtjv-k2qff-8dbb5   aws        us-east-2   4.20.14                 Provisioned       Running      67m
+```
+
 ## reCAPTCHA
 
 Google reCAPTCHA v3 protects the app endpoints from bots. It is optional -- if the env vars are not set, verification is skipped.

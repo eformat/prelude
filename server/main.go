@@ -218,6 +218,9 @@ func main() {
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
 		handleClaim(w, r, dynClient, clientset, pool, lifetime)
 	})
+	mux.HandleFunc("/api/admin", func(w http.ResponseWriter, r *http.Request) {
+		handleAdmin(w, r, dynClient, pool)
+	})
 
 	staticDir := filepath.Join("..", "client", "out")
 	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
@@ -232,6 +235,183 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"recaptchaSiteKey": recaptchaSiteKey,
 	})
+}
+
+type adminClaimInfo struct {
+	Name          string `json:"name"`
+	Pool          string `json:"pool"`
+	Phone         string `json:"phone"`
+	Authenticated bool   `json:"authenticated"`
+	Namespace     string `json:"namespace"`
+	Age           string `json:"age"`
+}
+
+type adminDeploymentInfo struct {
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	Platform        string `json:"platform"`
+	Region          string `json:"region"`
+	Version         string `json:"version"`
+	ProvisionStatus string `json:"provisionStatus"`
+	PowerState      string `json:"powerState"`
+	Age             string `json:"age"`
+}
+
+type adminResponse struct {
+	ClusterClaims      []adminClaimInfo      `json:"clusterClaims"`
+	ClusterDeployments []adminDeploymentInfo `json:"clusterDeployments"`
+}
+
+func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, pool string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	// List ClusterClaims
+	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("Admin: error listing ClusterClaims: %v", err)
+		http.Error(w, "Failed to list cluster claims", http.StatusInternalServerError)
+		return
+	}
+
+	var claimInfos []adminClaimInfo
+	for _, claim := range claims.Items {
+		if !claimMatchesPool(claim.Object, pool) {
+			continue
+		}
+		labels := claim.GetLabels()
+		phone := ""
+		authenticated := false
+		if labels != nil {
+			phone = labels["prelude"]
+			authenticated = labels["prelude-auth"] == "done"
+		}
+		ns := ""
+		if spec, ok := claim.Object["spec"].(map[string]interface{}); ok {
+			if v, ok := spec["namespace"].(string); ok {
+				ns = v
+			}
+		}
+		age := formatAge(time.Since(claim.GetCreationTimestamp().Time))
+		claimInfos = append(claimInfos, adminClaimInfo{
+			Name:          claim.GetName(),
+			Pool:          pool,
+			Phone:         phone,
+			Authenticated: authenticated,
+			Namespace:     ns,
+			Age:           age,
+		})
+	}
+
+	// List ClusterDeployments across all namespaces filtered by pool label
+	deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool),
+	})
+	if err != nil {
+		log.Printf("Admin: error listing ClusterDeployments: %v", err)
+		http.Error(w, "Failed to list cluster deployments", http.StatusInternalServerError)
+		return
+	}
+
+	var deployInfos []adminDeploymentInfo
+	for _, cd := range deployments.Items {
+		platform := ""
+		region := ""
+		version := ""
+		if spec, ok := cd.Object["spec"].(map[string]interface{}); ok {
+			if p, ok := spec["platform"].(map[string]interface{}); ok {
+				for k, v := range p {
+					if pm, ok := v.(map[string]interface{}); ok {
+						platform = k
+						if r, ok := pm["region"].(string); ok {
+							region = r
+						}
+						break
+					}
+				}
+			}
+		}
+
+		provisionStatus := ""
+		powerState := ""
+		if status, ok := cd.Object["status"].(map[string]interface{}); ok {
+			if conditions, ok := status["conditions"].([]interface{}); ok {
+				for _, c := range conditions {
+					cond, ok := c.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					condType, _ := cond["type"].(string)
+					condStatus, _ := cond["status"].(string)
+					if condType == "Provisioned" && condStatus == "True" {
+						provisionStatus = "Provisioned"
+					}
+					if condType == "Provisioning" && condStatus == "True" && provisionStatus == "" {
+						provisionStatus = "Provisioning"
+					}
+				}
+			}
+			if ps, ok := status["powerState"].(string); ok {
+				powerState = ps
+			}
+			if v, ok := status["installVersion"].(string); ok {
+				version = v
+			}
+		}
+
+		age := formatAge(time.Since(cd.GetCreationTimestamp().Time))
+		deployInfos = append(deployInfos, adminDeploymentInfo{
+			Name:            cd.GetName(),
+			Namespace:       cd.GetNamespace(),
+			Platform:        platform,
+			Region:          region,
+			Version:         version,
+			ProvisionStatus: provisionStatus,
+			PowerState:      powerState,
+			Age:             age,
+		})
+	}
+
+	resp := adminResponse{
+		ClusterClaims:      claimInfos,
+		ClusterDeployments: deployInfos,
+	}
+	if resp.ClusterClaims == nil {
+		resp.ClusterClaims = []adminClaimInfo{}
+	}
+	if resp.ClusterDeployments == nil {
+		resp.ClusterDeployments = []adminDeploymentInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// formatAge formats a duration as a human-readable age string (e.g. "67m", "2h30m", "1d3h").
+func formatAge(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("%dd%dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
+	}
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%dh%dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string, clusterLifetime string) {
