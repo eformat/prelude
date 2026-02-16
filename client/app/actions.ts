@@ -24,6 +24,7 @@ export interface AdminClaimInfo {
   authenticated: boolean;
   namespace: string;
   age: string;
+  expiresAt?: string;
 }
 
 export interface AdminDeploymentInfo {

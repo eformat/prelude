@@ -244,6 +244,7 @@ type adminClaimInfo struct {
 	Authenticated bool   `json:"authenticated"`
 	Namespace     string `json:"namespace"`
 	Age           string `json:"age"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
 }
 
 type adminDeploymentInfo struct {
@@ -291,9 +292,17 @@ func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 			authenticated = labels["prelude-auth"] == "done"
 		}
 		ns := ""
+		expiresAt := ""
 		if spec, ok := claim.Object["spec"].(map[string]interface{}); ok {
 			if v, ok := spec["namespace"].(string); ok {
 				ns = v
+			}
+			if phone != "" {
+				if lt, ok := spec["lifetime"].(string); ok {
+					if d, err := parseDuration(lt); err == nil {
+						expiresAt = claim.GetCreationTimestamp().Time.Add(d).UTC().Format(time.RFC3339)
+					}
+				}
 			}
 		}
 		age := formatAge(time.Since(claim.GetCreationTimestamp().Time))
@@ -304,6 +313,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 			Authenticated: authenticated,
 			Namespace:     ns,
 			Age:           age,
+			ExpiresAt:     expiresAt,
 		})
 	}
 

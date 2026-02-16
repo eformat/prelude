@@ -14,3 +14,5 @@ client/out/
 
 # OS
 .DS_Store
+server/.next/trace
+server/.next/trace-build

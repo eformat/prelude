@@ -23,6 +23,7 @@ export default function AdminPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [utcNow, setUtcNow] = useState("");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -43,6 +44,15 @@ export default function AdminPage() {
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  useEffect(() => {
+    function updateUTC() {
+      setUtcNow(new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC");
+    }
+    updateUTC();
+    const interval = setInterval(updateUTC, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const readyClaims = claims.filter((c) => c.authenticated);
   const availableClaims = claims.filter((c) => c.authenticated && !c.phone);
@@ -81,8 +91,9 @@ export default function AdminPage() {
               <h1 className="font-rh-display text-white text-2xl sm:text-3xl font-bold tracking-tight">
                 Cluster Status
               </h1>
+              <p className="font-mono text-rh-gray-40 text-sm mt-1">{utcNow}</p>
               {lastRefresh && (
-                <p className="font-rh-text text-rh-gray-50 text-sm mt-1">
+                <p className="font-rh-text text-rh-gray-50 text-xs mt-0.5">
                   Last updated {lastRefresh.toLocaleTimeString()}
                 </p>
               )}
@@ -158,13 +169,14 @@ export default function AdminPage() {
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Auth</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Available</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Namespace</th>
+                    <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Expires</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Age</th>
                   </tr>
                 </thead>
                 <tbody>
                   {claims.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center font-rh-text text-rh-gray-50">
+                      <td colSpan={7} className="px-6 py-8 text-center font-rh-text text-rh-gray-50">
                         No cluster claims found
                       </td>
                     </tr>
@@ -197,6 +209,18 @@ export default function AdminPage() {
                         )}
                       </td>
                       <td className="px-6 py-3 font-mono text-rh-gray-60 text-xs">{claim.namespace || "\u2014"}</td>
+                      <td className="px-6 py-3 font-rh-text text-rh-gray-60 text-xs">
+                        {claim.expiresAt
+                          ? new Date(claim.expiresAt).toLocaleString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              timeZone: "UTC",
+                              timeZoneName: "short",
+                            })
+                          : "\u2014"}
+                      </td>
                       <td className="px-6 py-3 font-rh-text text-rh-gray-60">{claim.age}</td>
                     </tr>
                   ))}
