@@ -185,42 +185,17 @@ The `/api/claim` call is made via a Next.js Server Action (not exposed to the br
 
 ### Admin page
 
-The admin page "/admin" shows the results of the following example queries.
+The admin page at `/admin` provides a dashboard view of cluster status. It is accessed via the Next.js client and fetches data from the Go server's `GET /api/admin` endpoint through a Next.js Server Action (not exposed to the browser).
 
-```bash
-# search claimed clusters label values
-oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude -o json | jq '.items[]' | jq '.metadata.["name"], .metadata.labels["prelude"], .metadata.labels["prelude-auth"]'
+The Go server returns JSON with two arrays: `clusterClaims` (name, pool, phone, authenticated, namespace, age) and `clusterDeployments` (name, namespace, platform, region, version, provisionStatus, powerState, age). ClusterClaims are filtered by `--cluster-pool`. ClusterDeployments are queried across all namespaces by the label `hive.openshift.io/clusterpool-name=<pool>`.
 
-"prelude1"
-"61-438-065-578"
-"done"
-```
+The page displays:
 
-```bash
-# search for clusters that are ready or already claimed
-oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude-auth
+- **Summary tiles** — Deployments, Claims, Ready (authenticated), Available (authenticated but unclaimed), Claimed (authenticated with phone label)
+- **Cluster Claims table** — Name, Phone, Auth status (`done`/`pending`), Available (orange badge when `prelude-auth=done` and no `prelude` phone label), Namespace, Age
+- **Cluster Deployments table** — Name, Platform, Region, Version, Provision Status (`Provisioned`/`Provisioning`), Power State, Age
 
-NAME       POOL            PENDING          CLUSTERNAMESPACE      CLUSTERRUNNING   AGE
-prelude1   prelude-lvtjv   ClusterClaimed   prelude-lvtjv-hz2qp   Running          67m
-```
-
-```bash
-# search for clusters that are claimed
-oc get clusterclaim.hive.openshift.io -n cluster-pools -l prelude-auth -l prelude
-
-NAME       POOL            PENDING          CLUSTERNAMESPACE      CLUSTERRUNNING   AGE
-prelude1   prelude-lvtjv   ClusterClaimed   prelude-lvtjv-hz2qp   Running          67m
-```
-
-```bash
-# search for all cluster deployments
-oc get clusterdeployments -l hive.openshift.io/clusterpool-name=prelude-lvtjv -A
-
-NAMESPACE             NAME                  INFRAID                     PLATFORM   REGION      VERSION   CLUSTERTYPE   PROVISIONSTATUS   POWERSTATE   AGE
-prelude-lvtjv-7xkvp   prelude-lvtjv-7xkvp   prelude-lvtjv-7xkvp-wgrg6   aws        us-east-2                           Provisioning                   20m
-prelude-lvtjv-hz2qp   prelude-lvtjv-hz2qp   prelude-lvtjv-hz2qp-v7qwp   aws        us-east-2   4.20.14                 Provisioned       Running      113m
-prelude-lvtjv-k2qff   prelude-lvtjv-k2qff   prelude-lvtjv-k2qff-8dbb5   aws        us-east-2   4.20.14                 Provisioned       Running      67m
-```
+The page auto-refreshes every 30 seconds with a manual refresh button.
 
 ## reCAPTCHA
 
