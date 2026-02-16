@@ -206,6 +206,13 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 	if err != nil {
 		return fmt.Errorf("building spoke REST config: %w", err)
 	}
+	// The old admin kubeconfig has a stale CA cert that doesn't match the
+	// cluster's new Let's Encrypt certificates, so skip TLS verification.
+	// The whole purpose of this authenticator is to regenerate kubeconfigs
+	// with the correct certs.
+	spokeConfig.TLSClientConfig.Insecure = true
+	spokeConfig.TLSClientConfig.CAData = nil
+	spokeConfig.TLSClientConfig.CAFile = ""
 
 	spokeDynClient, err := dynamic.NewForConfig(spokeConfig)
 	if err != nil {
