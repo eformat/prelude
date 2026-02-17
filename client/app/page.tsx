@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { claimCluster } from "./actions";
+import { getFingerprint } from "./fingerprint";
 
 interface ClusterInfo {
   webConsoleURL: string;
@@ -184,6 +185,29 @@ export default function Home() {
     setLoading(true);
 
     try {
+      let fingerprint = "";
+      try {
+        fingerprint = await getFingerprint();
+      } catch {
+        // Fingerprint not available, continue without it
+      }
+
+      // Client-side check: if this device already claimed with a different phone
+      if (fingerprint) {
+        try {
+          const stored = localStorage.getItem("prelude-claim");
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed.fingerprint === fingerprint && parsed.phone !== phone) {
+              setError("device_already_claimed");
+              return;
+            }
+          }
+        } catch {
+          // localStorage not available
+        }
+      }
+
       let recaptchaToken = "";
       try {
         if (executeRecaptcha) {
@@ -193,11 +217,20 @@ export default function Home() {
         // reCAPTCHA not available, continue without token
       }
 
-      const result = await claimCluster(phone, password, recaptchaToken);
+      const result = await claimCluster(phone, password, recaptchaToken, fingerprint);
 
       if (!result.success) {
         setError(result.error);
         return;
+      }
+
+      // Store claim info for client-side fingerprint check
+      if (fingerprint) {
+        try {
+          localStorage.setItem("prelude-claim", JSON.stringify({ phone, fingerprint }));
+        } catch {
+          // localStorage not available
+        }
       }
 
       setCluster(result.data);
@@ -352,6 +385,17 @@ export default function Home() {
                   <div className="px-6 py-5 bg-rh-gray-80 border border-rh-gray-70 text-center">
                     <p className="font-rh-text text-white text-lg leading-relaxed">
                       Sorry, all of our clusters are in use at the moment, try again later.
+                    </p>
+                  </div>
+                ) : error === "device_already_claimed" ? (
+                  <div className="flex items-start gap-3 px-5 py-4 bg-rh-red-80 border border-rh-red-70">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="mt-0.5 flex-shrink-0">
+                      <circle cx="10" cy="10" r="9" stroke="#F56E6E" strokeWidth="1.5" />
+                      <path d="M10 6V11" stroke="#F56E6E" strokeWidth="1.5" strokeLinecap="round" />
+                      <circle cx="10" cy="14" r="0.75" fill="#F56E6E" />
+                    </svg>
+                    <p className="font-rh-text text-rh-red-30 text-sm leading-relaxed">
+                      This device has already been used to claim a cluster. Please use your original phone number.
                     </p>
                   </div>
                 ) : (

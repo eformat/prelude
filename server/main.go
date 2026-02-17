@@ -50,6 +50,7 @@ type claimRequest struct {
 	Phone          string `json:"phone"`
 	Password       string `json:"password"`
 	RecaptchaToken string `json:"recaptchaToken"`
+	Fingerprint    string `json:"fingerprint"`
 }
 
 // sanitizePhone converts a phone number into a valid Kubernetes label value.
@@ -68,6 +69,20 @@ func sanitizePhone(phone string) string {
 	// Trim leading/trailing non-alphanumeric characters
 	result := strings.Trim(b.String(), "-_.")
 	return result
+}
+
+// sanitizeFingerprint validates and truncates a browser fingerprint to hex chars only, max 16 chars.
+func sanitizeFingerprint(fp string) string {
+	var b strings.Builder
+	for _, r := range fp {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			b.WriteRune(r)
+		}
+		if b.Len() >= 16 {
+			break
+		}
+	}
+	return b.String()
 }
 
 // parseDuration parses a duration string supporting d (days), h (hours), and m (minutes).
@@ -461,6 +476,8 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		return
 	}
 
+	fingerprint := sanitizeFingerprint(req.Fingerprint)
+
 	ctx := context.Background()
 
 	// List all ClusterClaims in cluster-pools namespace
@@ -503,8 +520,40 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 					}
 				}
 			}
+			// Backfill fingerprint label if not already set
+			if fingerprint != "" && labels["prelude-fp"] != fingerprint {
+				labels["prelude-fp"] = fingerprint
+				claim.SetLabels(labels)
+				if _, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{}); err != nil {
+					log.Printf("Warning: failed to backfill fingerprint on claim %s: %v", claimName, err)
+				} else {
+					log.Printf("Backfilled fingerprint %s on claim %s", fingerprint, claimName)
+				}
+			}
 			found = true
 			break
+		}
+	}
+
+	// If phone not found, check if this fingerprint already claimed a different cluster
+	if !found && fingerprint != "" {
+		for _, claim := range claims.Items {
+			if !claimMatchesPool(claim.Object, clusterPool) {
+				continue
+			}
+			labels := claim.GetLabels()
+			if labels == nil || labels["prelude-auth"] != "done" {
+				continue
+			}
+			if labels["prelude-fp"] == fingerprint && labels["prelude"] != "" && labels["prelude"] != phone {
+				log.Printf("Fingerprint %s already claimed by phone %s, rejecting phone %s", fingerprint, labels["prelude"], phone)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "device_already_claimed",
+				})
+				return
+			}
 		}
 	}
 
@@ -528,8 +577,11 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 					}
 				}
 
-				// Label the claim with the phone number
+				// Label the claim with the phone number and fingerprint
 				labels["prelude"] = phone
+				if fingerprint != "" {
+					labels["prelude-fp"] = fingerprint
+				}
 				claim.SetLabels(labels)
 
 				// Set spec.lifetime = age + configured lifetime

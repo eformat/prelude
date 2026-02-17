@@ -208,6 +208,18 @@ Both env vars are set on the Go server container:
 - `RECAPTCHA_SITE_KEY` — reCAPTCHA v3 site key (public). Served to the client at runtime via the `GET /api/config` endpoint.
 - `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA verification is disabled.
 
+## Browser Fingerprint Limiting
+
+To prevent users from claiming multiple clusters with different phone numbers, a browser fingerprint is generated client-side and sent with the claim request. The fingerprint is a SHA-256 hash (first 16 hex characters) of stable browser properties: canvas rendering, screen dimensions, color depth, language, hardware concurrency, platform, and timezone.
+
+The server stores the fingerprint as a `prelude-fp` label on the ClusterClaim. When a new claim is requested, the server checks if any existing claim has the same fingerprint but a different phone number, and rejects the request with a `device_already_claimed` error.
+
+The client also stores `{ phone, fingerprint }` in `localStorage` key `prelude-claim` for fast client-side pre-validation (avoids a server round-trip).
+
+**What it blocks:** Same browser/device with a different phone number (including incognito mode and cleared localStorage, since the server-side check is authoritative).
+
+**What it allows:** Different browser or different device (acceptable trade-off).
+
 ## Build
 
 ```bash

@@ -69,13 +69,14 @@ export async function getAdminData(): Promise<AdminResult | AdminError> {
 export async function claimCluster(
   phone: string,
   password: string,
-  recaptchaToken: string
+  recaptchaToken: string,
+  fingerprint: string
 ): Promise<ClaimResult | ClaimError> {
   try {
     const res = await fetch(`${API_URL}/api/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, password, recaptchaToken }),
+      body: JSON.stringify({ phone, password, recaptchaToken, fingerprint }),
     });
 
     if (!res.ok) {
@@ -83,6 +84,9 @@ export async function claimCluster(
         const body = await res.json();
         if (body.error === "all_clusters_in_use") {
           return { success: false, error: "all_clusters_in_use" };
+        }
+        if (body.error === "device_already_claimed") {
+          return { success: false, error: "device_already_claimed" };
         }
       } catch {
         // not JSON, fall through
