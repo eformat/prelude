@@ -183,6 +183,8 @@ These are displayed in the web app with easy copy and download buttons displayed
 
 The `/api/claim` call is made via a Next.js Server Action (not exposed to the browser). The client proxies `/api/config` to the Go server at `http://0.0.0.0:8080` via Next.js rewrites. The API URL is configurable via the `API_URL` environment variable.
 
+Google Analytics is enabled via the Next.js `<Script>` component in the root layout, loaded with `afterInteractive` strategy on all pages.
+
 ### Admin page
 
 The admin page at `/admin` provides a dashboard view of cluster status. It is accessed via the Next.js client and fetches data from the Go server's `GET /api/admin` endpoint through a Next.js Server Action (not exposed to the browser).
