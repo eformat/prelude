@@ -1,5 +1,8 @@
 "use server";
 
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 const API_URL = process.env.API_URL || "http://0.0.0.0:8080";
 
 interface ClaimResult {
@@ -53,9 +56,62 @@ interface AdminError {
   error: string;
 }
 
+interface LoginResult {
+  success: true;
+}
+
+interface LoginError {
+  success: false;
+  error: string;
+}
+
+export async function loginAdmin(
+  password: string
+): Promise<LoginResult | LoginError> {
+  try {
+    const res = await fetch(`${API_URL}/api/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+
+    if (!res.ok) {
+      return { success: false, error: "Invalid password" };
+    }
+
+    const data = await res.json();
+    const cookieStore = await cookies();
+    cookieStore.set("prelude-admin-session", data.token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24, // 24 hours
+    });
+
+    return { success: true };
+  } catch {
+    return { success: false, error: "Failed to connect to server" };
+  }
+}
+
+export async function logoutAdmin(): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.delete("prelude-admin-session");
+  redirect("/admin/login");
+}
+
 export async function getAdminData(): Promise<AdminResult | AdminError> {
   try {
-    const res = await fetch(`${API_URL}/api/admin`);
+    const cookieStore = await cookies();
+    const token = cookieStore.get("prelude-admin-session")?.value || "";
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(`${API_URL}/api/admin`, { headers });
+    if (res.status === 401) {
+      return { success: false, error: "unauthorized" };
+    }
     if (!res.ok) {
       return { success: false, error: "Failed to fetch admin data" };
     }

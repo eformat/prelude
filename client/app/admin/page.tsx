@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   getAdminData,
+  logoutAdmin,
   AdminClaimInfo,
   AdminDeploymentInfo,
 } from "../actions";
@@ -24,6 +26,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [utcNow, setUtcNow] = useState("");
+  const router = useRouter();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -34,10 +37,14 @@ export default function AdminPage() {
       setDeployments(result.data.clusterDeployments);
       setLastRefresh(new Date());
     } else {
+      if (result.error === "unauthorized") {
+        router.push("/admin/login");
+        return;
+      }
       setError(result.error);
     }
     setLoading(false);
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     fetchData();
@@ -77,6 +84,14 @@ export default function AdminPage() {
               <span className="font-rh-text text-rh-gray-40 text-sm">
                 Admin Dashboard
               </span>
+              <form action={logoutAdmin}>
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 font-rh-text text-sm font-medium text-rh-gray-40 border border-rh-gray-70 hover:border-rh-gray-50 hover:text-white transition-colors"
+                >
+                  Sign out
+                </button>
+              </form>
             </div>
           </div>
         </div>

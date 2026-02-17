@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -45,6 +48,16 @@ var (
 
 var recaptchaSecretKey string
 var recaptchaSiteKey string
+
+var adminPassword string
+var adminTokens = struct {
+	sync.RWMutex
+	m map[string]bool
+}{m: make(map[string]bool)}
+
+type adminLoginRequest struct {
+	Password string `json:"password"`
+}
 
 type claimRequest struct {
 	Phone          string `json:"phone"`
@@ -208,6 +221,13 @@ func main() {
 		log.Printf("reCAPTCHA verification disabled (RECAPTCHA_SECRET_KEY not set)")
 	}
 
+	adminPassword = os.Getenv("ADMIN_PASSWORD")
+	if adminPassword != "" {
+		log.Printf("Admin page authentication enabled")
+	} else {
+		log.Printf("Admin page authentication disabled (ADMIN_PASSWORD not set)")
+	}
+
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
 	log.Printf("Cluster lifetime: %s", *clusterLifetime)
 
@@ -233,6 +253,7 @@ func main() {
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
 		handleClaim(w, r, dynClient, clientset, pool, lifetime)
 	})
+	mux.HandleFunc("/api/admin/login", handleAdminLogin)
 	mux.HandleFunc("/api/admin", func(w http.ResponseWriter, r *http.Request) {
 		handleAdmin(w, r, dynClient, pool)
 	})
@@ -250,6 +271,67 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"recaptchaSiteKey": recaptchaSiteKey,
 	})
+}
+
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func validateAdminToken(r *http.Request) bool {
+	if adminPassword == "" {
+		return true
+	}
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return false
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	adminTokens.RLock()
+	defer adminTokens.RUnlock()
+	return adminTokens.m[token]
+}
+
+func handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if adminPassword == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"token": ""})
+		return
+	}
+
+	var req adminLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Password != adminPassword {
+		http.Error(w, "Invalid password", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := generateToken()
+	if err != nil {
+		log.Printf("Error generating admin token: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	adminTokens.Lock()
+	adminTokens.m[token] = true
+	adminTokens.Unlock()
+
+	log.Printf("Admin login successful, token issued")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 type adminClaimInfo struct {
@@ -281,6 +363,11 @@ type adminResponse struct {
 func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, pool string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !validateAdminToken(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 

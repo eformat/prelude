@@ -208,6 +208,23 @@ Both env vars are set on the Go server container:
 - `RECAPTCHA_SITE_KEY` — reCAPTCHA v3 site key (public). Served to the client at runtime via the `GET /api/config` endpoint.
 - `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA verification is disabled.
 
+## Admin Authentication
+
+The admin page at `/admin` is protected by password authentication. It is optional -- if the env var is not set, the admin page is accessible without auth.
+
+- `ADMIN_PASSWORD` — password required to access the admin dashboard. Set on the Go server container. When empty, admin authentication is disabled.
+
+The authentication flow:
+
+1. User navigates to `/admin` -- Next.js middleware checks for `prelude-admin-session` cookie
+2. No cookie -- redirect to `/admin/login`
+3. User enters password -- server action calls `POST /api/admin/login` on Go server
+4. Go server validates password against `ADMIN_PASSWORD` env var -- returns a random session token
+5. Server action sets `prelude-admin-session` cookie with the token value
+6. User is redirected to `/admin`
+7. The Go `GET /api/admin` endpoint validates the `Authorization: Bearer <token>` header for defense-in-depth
+8. Tokens are stored in-memory on the Go server -- sessions are invalidated on server restart
+
 ## Browser Fingerprint Limiting
 
 To prevent users from claiming multiple clusters with different phone numbers, a browser fingerprint is generated client-side and sent with the claim request. The fingerprint is a SHA-256 hash (first 16 hex characters) of stable browser properties: canvas rendering, screen dimensions, color depth, language, hardware concurrency, platform, and timezone.
