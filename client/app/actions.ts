@@ -144,6 +144,9 @@ export async function claimCluster(
         if (body.error === "device_already_claimed") {
           return { success: false, error: "device_already_claimed" };
         }
+        if (body.error === "cluster_unavailable") {
+          return { success: false, error: "cluster_unavailable" };
+        }
       } catch {
         // not JSON, fall through
       }

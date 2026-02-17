@@ -362,6 +362,12 @@ export default function Home() {
                       Sorry, all of our clusters are in use at the moment, try again later.
                     </p>
                   </div>
+                ) : error === "cluster_unavailable" ? (
+                  <div className="px-6 py-5 bg-rh-gray-80 border border-rh-gray-70 text-center">
+                    <p className="font-rh-text text-white text-lg leading-relaxed">
+                      The assigned cluster is no longer available. Please try again to get a new cluster.
+                    </p>
+                  </div>
                 ) : error === "device_already_claimed" ? (
                   <div className="flex items-start gap-3 px-5 py-4 bg-rh-red-80 border border-rh-red-70">
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="mt-0.5 flex-shrink-0">

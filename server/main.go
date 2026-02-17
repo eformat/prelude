@@ -764,12 +764,22 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	// Generate htpasswd entry and update the spoke cluster's htpass-secret (using admin kubeconfig)
 	if err := updateHtpasswd(adminKubeconfigData, password); err != nil {
 		log.Printf("Error updating htpasswd on spoke cluster %s: %v", clusterName, err)
-		http.Error(w, "Failed to set cluster admin password", http.StatusInternalServerError)
+
+		// Spoke cluster is unreachable (likely deprovisioning) — remove labels so it's
+		// no longer considered available and the user can get a different cluster.
+		log.Printf("Removing prelude and prelude-auth labels from claim %s (cluster unreachable)", claimName)
+		unlabelClaim(ctx, dynClient, claimName)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "cluster_unavailable",
+		})
 		return
 	}
 
 	// Derive AI console URL by replacing console-openshift-console with data-science-gateway
-	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1)
+	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
 
 	resp := claimResponse{
 		WebConsoleURL: webConsoleURL,
@@ -798,6 +808,27 @@ func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 		return false
 	}
 	return name == poolName
+}
+
+// unlabelClaim removes the prelude, prelude-auth, and prelude-fp labels from a ClusterClaim,
+// making it unavailable for assignment. Used when the spoke cluster is unreachable.
+func unlabelClaim(ctx context.Context, dynClient dynamic.Interface, claimName string) {
+	claim, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Get(ctx, claimName, metav1.GetOptions{})
+	if err != nil {
+		log.Printf("Error fetching claim %s for unlabeling: %v", claimName, err)
+		return
+	}
+	labels := claim.GetLabels()
+	delete(labels, "prelude")
+	delete(labels, "prelude-auth")
+	delete(labels, "prelude-fp")
+	claim.SetLabels(labels)
+	_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
+	if err != nil {
+		log.Printf("Error unlabeling claim %s: %v", claimName, err)
+		return
+	}
+	log.Printf("Unlabeled claim %s (removed prelude, prelude-auth, prelude-fp)", claimName)
 }
 
 // extractKubeconfig reads kubeconfig data from a Secret, handling common key names
