@@ -199,7 +199,7 @@ The page displays:
 
 The page auto-refreshes every 30 seconds with a manual refresh button.
 
-## reCAPTCHA
+### reCAPTCHA
 
 Google reCAPTCHA v3 protects the app endpoints from bots. It is optional -- if the env vars are not set, verification is skipped.
 
@@ -208,7 +208,7 @@ Both env vars are set on the Go server container:
 - `RECAPTCHA_SITE_KEY` — reCAPTCHA v3 site key (public). Served to the client at runtime via the `GET /api/config` endpoint.
 - `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA verification is disabled.
 
-## Admin Authentication
+### Admin Authentication
 
 The admin page at `/admin` is protected by password authentication. It is optional -- if the env var is not set, the admin page is accessible without auth.
 
@@ -225,7 +225,7 @@ The authentication flow:
 7. The Go `GET /api/admin` endpoint validates the `Authorization: Bearer <token>` header for defense-in-depth
 8. Tokens are stored in-memory on the Go server -- sessions are invalidated on server restart
 
-## Browser Fingerprint Limiting
+### Browser Fingerprint Limiting
 
 To prevent users from claiming multiple clusters with different phone numbers, a browser fingerprint is generated client-side and sent with the claim request. The fingerprint is a SHA-256 hash (first 16 hex characters) of stable browser properties: canvas rendering, screen dimensions, color depth, language, hardware concurrency, platform, and timezone.
 
