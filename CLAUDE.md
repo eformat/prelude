@@ -107,13 +107,21 @@ A separate Go binary (`cluster-claimer/`) that automates initial cluster provisi
 The cluster-claimer accepts the following flags:
 
 - `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
-- `--cluster-claim-limit` (or `CLUSTER_CLAIM_LIMIT` env var) — maximum number of ClusterClaims to create (default `4`)
+- `--cluster-claim-limit` (or `CLUSTER_CLAIM_LIMIT` env var) — base number of ClusterClaims to create (default `4`)
+- `--cluster-claim-max` (or `CLUSTER_CLAIM_MAX` env var) — maximum number of ClusterClaims when scaling up (default `10`)
+- `--cluster-claim-increment` (or `CLUSTER_CLAIM_INCREMENT` env var) — number of claims to add each time the limit scales up (default `1`)
 
 ```bash
-./cluster-claimer --cluster-pool prelude-q8jzk --cluster-claim-limit 4
+./cluster-claimer --cluster-pool prelude-q8jzk --cluster-claim-limit 4 --cluster-claim-max 10 --cluster-claim-increment 1
 ```
 
-ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the `--cluster-claim-limit`.
+ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the effective claim limit.
+
+### Dynamic Claim Limit
+
+The claim limit scales dynamically based on cluster availability. The effective limit starts at `--cluster-claim-limit` and increases when no clusters are available for users (authenticated but unclaimed). On each reconcile iteration, if there are 0 available clusters and the effective limit is below `--cluster-claim-max`, the limit increases by `--cluster-claim-increment` (capped at `--cluster-claim-max`). Scale-up has a 25-minute cooldown between increments, since clusters take approximately that long to become available after a ClusterClaim is created. A cluster is considered "available" when it has the `prelude-auth=done` label and no `prelude` phone label.
+
+When clusters become available again, the effective limit scales back down to `--cluster-claim-limit` after a 10-minute hysteresis period. This prevents flapping — the limit only resets once clusters have been continuously available for 10 minutes. If availability drops to 0 during the hysteresis window, the timer resets and scale-up resumes immediately.
 
 It performs the following steps:
 

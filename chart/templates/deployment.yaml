@@ -72,6 +72,10 @@ spec:
               value: "{{ .Values.server.clusterPool }}"
             - name: CLUSTER_CLAIM_LIMIT
               value: "{{ .Values.clusterClaimer.clusterClaimLimit }}"
+            - name: CLUSTER_CLAIM_MAX
+              value: "{{ .Values.clusterClaimer.clusterClaimMax }}"
+            - name: CLUSTER_CLAIM_INCREMENT
+              value: "{{ .Values.clusterClaimer.clusterClaimIncrement }}"
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig

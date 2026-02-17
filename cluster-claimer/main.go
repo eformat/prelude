@@ -36,7 +36,9 @@ var (
 
 func main() {
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
-	clusterClaimLimitStr := flag.String("cluster-claim-limit", os.Getenv("CLUSTER_CLAIM_LIMIT"), "Maximum number of ClusterClaims to create (default 4)")
+	clusterClaimLimitStr := flag.String("cluster-claim-limit", os.Getenv("CLUSTER_CLAIM_LIMIT"), "Base number of ClusterClaims to create (default 4)")
+	clusterClaimMaxStr := flag.String("cluster-claim-max", os.Getenv("CLUSTER_CLAIM_MAX"), "Maximum number of ClusterClaims when scaling up (default 10)")
+	clusterClaimIncrementStr := flag.String("cluster-claim-increment", os.Getenv("CLUSTER_CLAIM_INCREMENT"), "Number of ClusterClaims to add when scaling up (default 1)")
 	flag.Parse()
 
 	if *clusterPool == "" {
@@ -51,8 +53,27 @@ func main() {
 		}
 	}
 
+	claimMax := 10
+	if *clusterClaimMaxStr != "" {
+		n, err := fmt.Sscanf(*clusterClaimMaxStr, "%d", &claimMax)
+		if n != 1 || err != nil {
+			log.Fatalf("Invalid --cluster-claim-max value: %s", *clusterClaimMaxStr)
+		}
+	}
+	claimIncrement := 1
+	if *clusterClaimIncrementStr != "" {
+		n, err := fmt.Sscanf(*clusterClaimIncrementStr, "%d", &claimIncrement)
+		if n != 1 || err != nil {
+			log.Fatalf("Invalid --cluster-claim-increment value: %s", *clusterClaimIncrementStr)
+		}
+	}
+
+	if claimMax < claimLimit {
+		claimMax = claimLimit
+	}
+
 	log.Printf("Cluster pool: %s", *clusterPool)
-	log.Printf("Cluster claim limit: %d", claimLimit)
+	log.Printf("Cluster claim limit: %d (max: %d, increment: %d)", claimLimit, claimMax, claimIncrement)
 
 	config, err := buildConfig()
 	if err != nil {
@@ -84,22 +105,60 @@ func main() {
 	}
 
 	// Step 2: Reconcile loop — watch for changes and create claims as needed
-	reconcile(ctx, dynClient, pool, claimLimit)
+	reconcile(ctx, dynClient, pool, claimLimit, claimMax, claimIncrement)
 	log.Printf("Cluster claimer shutting down")
 }
 
 // reconcile continuously watches ClusterDeployments and creates ClusterClaims
-// as new deployments become provisioned, up to the claim limit.
-func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, claimLimit int) {
+// as new deployments become provisioned, up to the claim limit. The effective
+// limit starts at baseLimit and increases when no clusters are available,
+// up to maxLimit. It scales back down to baseLimit after clusters have been
+// available for 10 minutes (hysteresis).
+func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, baseLimit, maxLimit, increment int) {
 	labelSelector := fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool)
+	effectiveLimit := baseLimit
+	var availableSince time.Time // when available clusters were first seen
+	var lastScaleUp time.Time   // when we last scaled up (25min cooldown)
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
+		// Dynamic scaling of effective limit
+		available, err := countAvailableClaims(ctx, dynClient, pool)
+		if err != nil {
+			log.Printf("Error counting available claims: %v", err)
+		} else if available == 0 {
+			// No available clusters — scale up (with 25min cooldown) and reset scale-down timer
+			availableSince = time.Time{}
+			if effectiveLimit < maxLimit {
+				if !lastScaleUp.IsZero() && time.Since(lastScaleUp) < 25*time.Minute {
+					log.Printf("No available clusters, waiting for previous scale-up to take effect (%s ago)", time.Since(lastScaleUp).Truncate(time.Second))
+				} else {
+					prev := effectiveLimit
+					effectiveLimit += increment
+					if effectiveLimit > maxLimit {
+						effectiveLimit = maxLimit
+					}
+					lastScaleUp = time.Now()
+					log.Printf("No available clusters, increasing claim limit from %d to %d (max: %d)", prev, effectiveLimit, maxLimit)
+				}
+			}
+		} else {
+			// Clusters are available — track for hysteresis and scale down after 10min
+			if availableSince.IsZero() {
+				availableSince = time.Now()
+				log.Printf("Available clusters detected (%d), starting hysteresis timer", available)
+			} else if effectiveLimit > baseLimit && time.Since(availableSince) >= 10*time.Minute {
+				log.Printf("Clusters available for 10+ minutes, scaling claim limit back from %d to %d", effectiveLimit, baseLimit)
+				effectiveLimit = baseLimit
+				availableSince = time.Time{}
+			}
+		}
+
 		// Check and create any needed claims
-		created := createNeededClaims(ctx, dynClient, pool, claimLimit)
+		created := createNeededClaims(ctx, dynClient, pool, effectiveLimit)
 		if created > 0 {
 			log.Printf("Reconcile: created %d claim(s)", created)
 		}
@@ -241,6 +300,27 @@ func countClaimsForPool(ctx context.Context, dynClient dynamic.Interface, pool s
 	count := 0
 	for _, claim := range claims.Items {
 		if claimMatchesPool(claim.Object, pool) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// countAvailableClaims counts ClusterClaims that are authenticated (prelude-auth=done)
+// but not yet claimed by a user (no prelude phone label).
+func countAvailableClaims(ctx context.Context, dynClient dynamic.Interface, pool string) (int, error) {
+	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("listing ClusterClaims: %w", err)
+	}
+
+	count := 0
+	for _, claim := range claims.Items {
+		if !claimMatchesPool(claim.Object, pool) {
+			continue
+		}
+		labels := claim.GetLabels()
+		if labels["prelude-auth"] == "done" && labels["prelude"] == "" {
 			count++
 		}
 	}
