@@ -50,6 +50,10 @@ spec:
             - name: RECAPTCHA_SECRET_KEY
               value: "{{ .Values.server.recaptchaSecretKey }}"
             {{- end }}
+            {{- if .Values.server.adminPassword }}
+            - name: ADMIN_PASSWORD
+              value: "{{ .Values.server.adminPassword }}"
+            {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
