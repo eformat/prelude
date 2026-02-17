@@ -124,13 +124,13 @@ export default function AdminPage() {
               <p className="font-rh-text text-rh-gray-40 text-xs uppercase tracking-wider">Ready</p>
               <p className="font-rh-display text-white text-2xl font-bold mt-1">{readyClaims.length}</p>
             </div>
-            <div className="bg-rh-gray-90 border border-orange-700/40 px-5 py-4">
-              <p className="font-rh-text text-orange-400 text-xs uppercase tracking-wider">Available</p>
-              <p className="font-rh-display text-orange-400 text-2xl font-bold mt-1">{availableClaims.length}</p>
-            </div>
             <div className="bg-rh-gray-90 border border-rh-gray-70 px-5 py-4">
               <p className="font-rh-text text-rh-gray-40 text-xs uppercase tracking-wider">Claimed</p>
               <p className="font-rh-display text-white text-2xl font-bold mt-1">{claimedClaims.length}</p>
+            </div>
+            <div className="bg-rh-gray-90 border border-orange-700/40 px-5 py-4">
+              <p className="font-rh-text text-orange-400 text-xs uppercase tracking-wider">Available</p>
+              <p className="font-rh-display text-orange-400 text-2xl font-bold mt-1">{availableClaims.length}</p>
             </div>
           </div>
         </div>
