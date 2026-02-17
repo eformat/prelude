@@ -192,22 +192,6 @@ export default function Home() {
         // Fingerprint not available, continue without it
       }
 
-      // Client-side check: if this device already claimed with a different phone
-      if (fingerprint) {
-        try {
-          const stored = localStorage.getItem("prelude-claim");
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            if (parsed.fingerprint === fingerprint && parsed.phone !== phone) {
-              setError("device_already_claimed");
-              return;
-            }
-          }
-        } catch {
-          // localStorage not available
-        }
-      }
-
       let recaptchaToken = "";
       try {
         if (executeRecaptcha) {
@@ -222,15 +206,6 @@ export default function Home() {
       if (!result.success) {
         setError(result.error);
         return;
-      }
-
-      // Store claim info for client-side fingerprint check
-      if (fingerprint) {
-        try {
-          localStorage.setItem("prelude-claim", JSON.stringify({ phone, fingerprint }));
-        } catch {
-          // localStorage not available
-        }
       }
 
       setCluster(result.data);
