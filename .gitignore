@@ -16,3 +16,4 @@ client/out/
 .DS_Store
 server/.next/trace
 server/.next/trace-build
+client/app/firebase.ts

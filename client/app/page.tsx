@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
+import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from "firebase/auth";
+import { auth } from "./firebase";
 import { claimCluster } from "./actions";
 import { getFingerprint } from "./fingerprint";
 
@@ -158,6 +160,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [step, setStep] = useState<"input" | "verify">("input");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const { executeRecaptcha } = useGoogleReCaptcha();
 
   function validatePhone(value: string): string | null {
@@ -171,7 +177,7 @@ export default function Home() {
     return null;
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSendCode(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setCluster(null);
@@ -185,6 +191,59 @@ export default function Home() {
     setLoading(true);
 
     try {
+      // Format phone number with + prefix if not present
+      const formattedPhone = phone.startsWith("+") ? phone : `+${phone.replace(/\D/g, "")}`;
+
+      // Clean up any existing verifier
+      if (recaptchaVerifierRef.current) {
+        recaptchaVerifierRef.current.clear();
+        recaptchaVerifierRef.current = null;
+      }
+
+      const verifier = new RecaptchaVerifier(auth, "send-code-button", {
+        size: "invisible",
+      });
+      recaptchaVerifierRef.current = verifier;
+
+      const result = await signInWithPhoneNumber(auth, formattedPhone, verifier);
+      setConfirmationResult(result);
+      setStep("verify");
+    } catch (err: unknown) {
+      // Clean up verifier on error so it can be recreated on retry
+      if (recaptchaVerifierRef.current) {
+        recaptchaVerifierRef.current.clear();
+        recaptchaVerifierRef.current = null;
+      }
+      const firebaseError = err as { code?: string; message?: string };
+      if (firebaseError.code === "auth/invalid-phone-number") {
+        setError("Invalid phone number. Please include your country code (e.g. +1 for US).");
+      } else if (firebaseError.code === "auth/too-many-requests") {
+        setError("Too many attempts. Please try again later.");
+      } else if (firebaseError.code === "auth/quota-exceeded") {
+        setError("SMS quota exceeded. Please try again later.");
+      } else {
+        setError(firebaseError.message || "Failed to send verification code. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyAndClaim(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+
+    if (!confirmationResult) {
+      setError("Verification session expired. Please go back and try again.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await confirmationResult.confirm(verificationCode);
+
+      // Phone verified — proceed with claim
       let fingerprint = "";
       try {
         fingerprint = await getFingerprint();
@@ -209,11 +268,25 @@ export default function Home() {
       }
 
       setCluster(result.data);
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err: unknown) {
+      const firebaseError = err as { code?: string; message?: string };
+      if (firebaseError.code === "auth/invalid-verification-code") {
+        setError("Invalid verification code. Please check and try again.");
+      } else if (firebaseError.code === "auth/code-expired") {
+        setError("Verification code has expired. Please go back and resend.");
+      } else {
+        setError(firebaseError.message || "Verification failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleBackToInput() {
+    setStep("input");
+    setVerificationCode("");
+    setConfirmationResult(null);
+    setError("");
   }
 
   function downloadKubeconfig(content: string) {
@@ -290,68 +363,129 @@ export default function Home() {
             </p>
 
             {/* Phone Input Form */}
-            <form
-              onSubmit={handleSubmit}
-              className="animate-fade-in-up"
-              style={{ animationDelay: '0.2s' }}
-            >
-              <div className="flex flex-col gap-4 max-w-xl">
-                <div className="flex flex-col sm:flex-row gap-4">
-                  <div className="flex-1 relative">
-                    <label htmlFor="phone" className="sr-only">Phone number</label>
-                    <input
-                      id="phone"
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="Enter phone number"
-                      className="w-full px-5 py-4 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
-                      required
-                    />
+            {step === "input" ? (
+              <form
+                onSubmit={handleSendCode}
+                className="animate-fade-in-up"
+                style={{ animationDelay: '0.2s' }}
+              >
+                <div className="flex flex-col gap-4 max-w-xl">
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <div className="flex-1 relative">
+                      <label htmlFor="phone" className="sr-only">Phone number</label>
+                      <input
+                        id="phone"
+                        type="tel"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="Enter phone number (e.g. +1234567890)"
+                        className="w-full px-5 py-4 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
+                        required
+                      />
+                    </div>
+                    <div className="flex-1 relative">
+                      <label htmlFor="password" className="sr-only">Admin password</label>
+                      <input
+                        id="password"
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Admin password"
+                        className="w-full px-5 py-4 pr-12 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-rh-gray-50 hover:text-white transition-colors"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex-1 relative">
-                    <label htmlFor="password" className="sr-only">Admin password</label>
-                    <input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Admin password"
-                      className="w-full px-5 py-4 pr-12 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
-                      required
-                    />
+                  <button
+                    id="send-code-button"
+                    type="submit"
+                    disabled={loading}
+                    className="group flex items-center justify-center gap-3 px-8 py-4 bg-rh-red-50 text-white font-rh-text font-bold text-base hover:bg-rh-red-60 disabled:bg-rh-gray-70 disabled:text-rh-gray-50 transition-all duration-200"
+                  >
+                    {loading ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span>Sending code</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Send verification code</span>
+                        <ArrowIcon />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form
+                onSubmit={handleVerifyAndClaim}
+                className="animate-fade-in-up"
+                style={{ animationDelay: '0.2s' }}
+              >
+                <div className="flex flex-col gap-4 max-w-xl">
+                  <div className="px-5 py-3 bg-rh-gray-90 border border-rh-gray-70 flex items-center justify-between">
+                    <span className="font-rh-text text-white text-base">{phone}</span>
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-rh-gray-50 hover:text-white transition-colors"
-                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      onClick={handleBackToInput}
+                      className="font-rh-text text-rh-red-50 hover:text-rh-red-40 text-sm font-medium transition-colors"
                     >
-                      {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                      Change number
                     </button>
                   </div>
+                  <div className="relative">
+                    <label htmlFor="verification-code" className="sr-only">Verification code</label>
+                    <input
+                      id="verification-code"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={verificationCode}
+                      onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="Enter 6-digit code"
+                      className="w-full px-5 py-4 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors tracking-widest text-center text-xl"
+                      maxLength={6}
+                      autoFocus
+                      required
+                    />
+                  </div>
+                  <p className="font-rh-text text-rh-gray-50 text-sm">
+                    A verification code has been sent to your phone via SMS.
+                  </p>
+                  <button
+                    type="submit"
+                    disabled={loading || verificationCode.length !== 6}
+                    className="group flex items-center justify-center gap-3 px-8 py-4 bg-rh-red-50 text-white font-rh-text font-bold text-base hover:bg-rh-red-60 disabled:bg-rh-gray-70 disabled:text-rh-gray-50 transition-all duration-200"
+                  >
+                    {loading ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span>Verifying & claiming cluster</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Verify & get cluster</span>
+                        <ArrowIcon />
+                      </>
+                    )}
+                  </button>
                 </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="group flex items-center justify-center gap-3 px-8 py-4 bg-rh-red-50 text-white font-rh-text font-bold text-base hover:bg-rh-red-60 disabled:bg-rh-gray-70 disabled:text-rh-gray-50 transition-all duration-200"
-                >
-                  {loading ? (
-                    <>
-                      <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      <span>Claiming cluster</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Get cluster</span>
-                      <ArrowIcon />
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+              </form>
+            )}
 
             {/* Error Message */}
             {error && (
