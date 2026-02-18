@@ -129,8 +129,8 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, ba
 		available, err := countAvailableClaims(ctx, dynClient, pool)
 		if err != nil {
 			log.Printf("Error counting available claims: %v", err)
-		} else if available == 0 {
-			// No available clusters — scale up (with 25min cooldown) and reset scale-down timer
+		} else if available == 1 { // scale early rather than zero
+			// One available cluster — scale up (with 25min cooldown) and reset scale-down timer
 			availableSince = time.Time{}
 			if effectiveLimit < maxLimit {
 				if !lastScaleUp.IsZero() && time.Since(lastScaleUp) < 25*time.Minute {
