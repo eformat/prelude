@@ -294,13 +294,16 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 }
 
 // waitForStableCluster waits for all ClusterOperators to be stable for a
-// minimum period, equivalent to: oc adm wait-for-stable-cluster --minimum-stable-period=120s --timeout=30m
+// minimum period, equivalent to: oc adm wait-for-stable-cluster --minimum-stable-period=60s --timeout=30m
 func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface, clusterName string) error {
 	timeout := 30 * time.Minute
-	stablePeriod := 120 * time.Second
+	stablePeriod := 60 * time.Second
+	unreachableTimeout := 1 * time.Minute
 	deadline := time.Now().Add(timeout)
 
 	var stableSince *time.Time
+	var unreachableSince *time.Time
+	everReached := false
 
 	for {
 		if ctx.Err() != nil {
@@ -314,9 +317,19 @@ func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface,
 		if err != nil {
 			log.Printf("[%s] Error checking ClusterOperators: %v", clusterName, err)
 			stableSince = nil
+			if !everReached {
+				now := time.Now()
+				if unreachableSince == nil {
+					unreachableSince = &now
+				} else if time.Since(*unreachableSince) >= unreachableTimeout {
+					return fmt.Errorf("cluster %s unreachable for %v, skipping to retry later", clusterName, unreachableTimeout)
+				}
+			}
 			sleepOrDone(ctx, 10*time.Second)
 			continue
 		}
+		everReached = true
+		unreachableSince = nil
 
 		if stable {
 			now := time.Now()
