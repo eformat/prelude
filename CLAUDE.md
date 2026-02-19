@@ -177,7 +177,7 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
    Obtain a MaaS token:
 
    ```bash
-   CLUSTER_DOMAIN=apps.roadshow-6kr2w.sandbox1763.opentlc.com
+   CLUSTER_DOMAIN=apps.prelude-q8jzk.sandbox1763.opentlc.com
    USER_TOKEN="to be provided"
 
    HOST="https://maas.${CLUSTER_DOMAIN}"
