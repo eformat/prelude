@@ -193,6 +193,23 @@ The `/api/claim` call is made via a Next.js Server Action (not exposed to the br
 
 Google Analytics is enabled via the Next.js `<Script>` component in the root layout, loaded with `afterInteractive` strategy on all pages.
 
+### Firebase Phone Authentication
+
+Phone numbers are verified via SMS using Firebase Authentication before a cluster is claimed. The flow is a two-step process:
+
+1. **Send verification code** — the user enters their phone number (with country code, e.g. `+1234567890`) and admin password. The client creates a Firebase `RecaptchaVerifier` (invisible mode, attached to the submit button) and calls `signInWithPhoneNumber()` to send an SMS code.
+
+2. **Verify code & claim** — the user enters the 6-digit SMS code. The client calls `confirmationResult.confirm(code)` to verify with Firebase. On success, it generates the browser fingerprint, executes the reCAPTCHA v3 token, and calls the `claimCluster` server action.
+
+Firebase error codes are handled with user-friendly messages:
+- `auth/invalid-phone-number` — prompts user to include country code
+- `auth/too-many-requests` — rate limit message
+- `auth/quota-exceeded` — SMS quota message
+- `auth/invalid-verification-code` — invalid code message
+- `auth/code-expired` — expired code, prompts resend
+
+The Firebase config is in `client/app/firebase.ts` (excluded from git via `.gitignore`). This file must exist with a valid Firebase project config for phone auth to work. The config initializes `firebase/auth` and exports the `auth` instance.
+
 ### Admin page
 
 The admin page at `/admin` provides a dashboard view of cluster status. It is accessed via the Next.js client and fetches data from the Go server's `GET /api/admin` endpoint through a Next.js Server Action (not exposed to the browser).
@@ -244,6 +261,77 @@ The client also stores `{ phone, fingerprint }` in `localStorage` key `prelude-c
 **What it blocks:** Same browser/device with a different phone number (including incognito mode and cleared localStorage, since the server-side check is authoritative).
 
 **What it allows:** Different browser or different device (acceptable trade-off).
+
+## Helm Chart
+
+A Helm chart in `chart/` deploys all four components as a single Pod with four containers (client, server, cluster-claimer, cluster-authenticator) sharing the same kubeconfig volume.
+
+```bash
+make helm-deploy                 # helm upgrade --install prelude ./chart
+```
+
+### Chart Structure
+
+```
+chart/
+├── Chart.yaml                   # name: prelude, version: 0.1.0
+├── values.yaml                  # Default configuration
+└── templates/
+    ├── deployment.yaml          # Single Pod with 4 containers
+    ├── service.yaml
+    ├── route.yaml               # OpenShift Route
+    ├── serviceaccount.yaml
+    ├── clusterrole.yaml
+    ├── clusterrolebinding.yaml
+    └── _helpers.tpl
+```
+
+### Configuration (values.yaml)
+
+```yaml
+server:
+  image:
+    repository: quay.io/eformat/prelude-server
+    tag: latest
+  clusterPool: ""                # Required — ClusterPool name
+  clusterLifetime: "2h"
+  kubeconfigSecret: ""           # Kubernetes Secret name mounted as KUBECONFIG
+  recaptchaSiteKey: ""
+  recaptchaSecretKey: ""
+  adminPassword: ""
+
+clusterClaimer:
+  image:
+    repository: quay.io/eformat/prelude-cluster-claimer
+    tag: latest
+  clusterClaimLimit: "4"
+  clusterClaimMax: "10"
+  clusterClaimIncrement: "1"
+
+clusterAuthenticator:
+  image:
+    repository: quay.io/eformat/prelude-cluster-authenticator
+    tag: latest
+
+client:
+  image:
+    repository: quay.io/eformat/prelude-client
+    tag: latest
+
+route:
+  host: ""                       # OpenShift Route hostname
+```
+
+### Deployment Architecture
+
+The Deployment creates a single Pod with four containers:
+
+- **client** — port 3000, serves the Next.js app
+- **server** — Go API server (internal to pod, no exposed port)
+- **cluster-claimer** — watches for provisioned ClusterDeployments and creates ClusterClaims
+- **cluster-authenticator** — processes bound ClusterClaims and prepares kubeconfig credentials
+
+All containers share the same `CLUSTER_POOL` env var. If `kubeconfigSecret` is set, all containers mount the Secret at `/etc/prelude/kubeconfig/kubeconfig` and set the `KUBECONFIG` env var. RBAC is configured via a ServiceAccount with a ClusterRole and ClusterRoleBinding. The Service routes traffic to the client container on port 3000, and an OpenShift Route exposes it externally.
 
 ## Build
 
