@@ -172,6 +172,69 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
        -n openshift-config
    ```
 
+   We also need to update Model as a Service (MaaS) credentials as follows.
+
+   Obtain a MaaS token:
+
+   ```bash
+   CLUSTER_DOMAIN=apps.roadshow-6kr2w.sandbox1763.opentlc.com
+   USER_TOKEN="to be provided"
+
+   HOST="https://maas.${CLUSTER_DOMAIN}"
+
+   TOKEN_RESPONSE=$(curl -sSk \
+    -H "Authorization: Bearer $USER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -X POST \
+    -d '{"expiration": "10m"}' \
+    "${HOST}/maas-api/v1/tokens") && \
+   TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token) && \
+   ```
+
+   List available model:
+
+   ```bash
+   MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" | jq -r .) && \
+   MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
+   ```
+
+   On the spoke cluster update the following configmap:
+
+   ```bash
+   oc -n chat get cm chat-openwebui
+
+   apiVersion: v1
+   data:
+     OPENAI_API_BASE_URLS: $MODEL_URL/v1
+   kind: ConfigMap
+   metadata:
+     name: chat-openwebui
+     namespace: chat
+   ```
+
+   On the spoke cluster update the following secret:
+  
+   ```bash
+   oc -n chat get secret chat-openwebui
+
+   apiVersion: v1
+   stringData:
+     OPENAI_API_KEYS: "$TOKEN"
+   kind: Secret
+   metadata:
+     name: chat-openwebui
+     namespace: chat
+   type: Opaque
+   ```
+
+   Restart the chat pod:
+
+   ```bash
+   oc -n chat delete pod -l app.kubernetes.io/name=openwebui
+   ```
+
 8. **Label claim as authenticated** — sets `prelude-auth=done` on the ClusterClaim, marking it as ready for users.
 
 The cluster-authenticator runs as a sidecar container in the same pod as the server, client, and cluster-claimer, sharing the same kubeconfig volume. It runs asynchronously and independently. It shuts down cleanly on SIGINT/SIGTERM.

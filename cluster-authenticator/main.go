@@ -8,10 +8,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,6 +55,8 @@ var (
 
 func main() {
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
+	maasURL := flag.String("maas-url", os.Getenv("MAAS_URL"), "MaaS API base URL, e.g. https://maas.apps.example.com (optional)")
+	maasToken := flag.String("maas-token", os.Getenv("MAAS_TOKEN"), "MaaS user token for updating chat credentials (optional)")
 	flag.Parse()
 
 	if *clusterPool == "" {
@@ -59,6 +64,9 @@ func main() {
 	}
 
 	log.Printf("Cluster pool: %s", *clusterPool)
+	if *maasURL != "" && *maasToken != "" {
+		log.Printf("MaaS: configured (url: %s)", *maasURL)
+	}
 
 	config, err := buildConfig()
 	if err != nil {
@@ -87,19 +95,19 @@ func main() {
 		cancel()
 	}()
 
-	reconcile(ctx, hubDynClient, hubClientset, *clusterPool)
+	reconcile(ctx, hubDynClient, hubClientset, *clusterPool, *maasURL, *maasToken)
 	log.Printf("Cluster authenticator shutting down")
 }
 
 // reconcile continuously watches ClusterClaims and authenticates bound claims
 // that haven't been processed yet.
-func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
+func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, maasURL, maasToken string) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		processUnauthenticatedClaims(ctx, hubDynClient, hubClientset, pool)
+		processUnauthenticatedClaims(ctx, hubDynClient, hubClientset, pool, maasURL, maasToken)
 
 		// Watch for ClusterClaim changes, then re-reconcile
 		var timeoutSecs int64 = 30
@@ -131,7 +139,7 @@ func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset
 
 // processUnauthenticatedClaims finds bound ClusterClaims without the
 // prelude-auth=done label and processes them.
-func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
+func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, maasURL, maasToken string) {
 	claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error listing ClusterClaims: %v", err)
@@ -162,7 +170,7 @@ func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Inte
 		claimName := claim.GetName()
 		log.Printf("Processing unauthenticated claim %s (cluster: %s)", claimName, clusterName)
 
-		if err := authenticateCluster(ctx, hubDynClient, hubClientset, claimName, clusterName); err != nil {
+		if err := authenticateCluster(ctx, hubDynClient, hubClientset, claimName, clusterName, maasURL, maasToken); err != nil {
 			log.Printf("Error authenticating cluster %s (claim %s): %v", clusterName, claimName, err)
 			continue
 		}
@@ -178,7 +186,7 @@ func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Inte
 }
 
 // authenticateCluster performs the full authentication flow for a spoke cluster.
-func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, claimName, clusterName string) error {
+func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, claimName, clusterName, maasURL, maasToken string) error {
 	// Step 1: Get spoke admin kubeconfig from hub
 	log.Printf("[%s] Getting ClusterDeployment", clusterName)
 	cd, err := hubDynClient.Resource(clusterDeploymentGVR).Namespace(clusterName).Get(ctx, clusterName, metav1.GetOptions{})
@@ -272,6 +280,14 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 	}
 	if err := createSpokeResources(ctx, newSpokeClientset, clusterName); err != nil {
 		return fmt.Errorf("creating spoke resources: %w", err)
+	}
+
+	// Update MaaS credentials if URL and token are configured
+	if maasURL != "" && maasToken != "" {
+		log.Printf("[%s] Updating MaaS credentials (url: %s)", clusterName, maasURL)
+		if err := updateMaaSCredentials(ctx, newSpokeClientset, maasURL, maasToken, clusterName); err != nil {
+			return fmt.Errorf("updating MaaS credentials: %w", err)
+		}
 	}
 
 	return nil
@@ -614,6 +630,159 @@ func createSpokeResources(ctx context.Context, spokeClientset kubernetes.Interfa
 		log.Printf("[%s] htpass-secret already exists in openshift-config", clusterName)
 	}
 
+	return nil
+}
+
+// updateMaaSCredentials obtains a MaaS token, lists available models, and
+// updates the chat-openwebui ConfigMap and Secret on the spoke cluster.
+func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interface, maasURL, maasToken, clusterName string) error {
+	maasHost := strings.TrimRight(maasURL, "/")
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	// Obtain MaaS token
+	tokenBody := strings.NewReader(`{"expiration": "4h"}`)
+	req, err := http.NewRequestWithContext(ctx, "POST", maasHost+"/maas-api/v1/tokens", tokenBody)
+	if err != nil {
+		return fmt.Errorf("creating token request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+maasToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("requesting MaaS token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("MaaS token request failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return fmt.Errorf("decoding token response: %w", err)
+	}
+	if tokenResp.Token == "" {
+		return fmt.Errorf("empty token in MaaS response")
+	}
+	log.Printf("[%s] Obtained MaaS token", clusterName)
+
+	// List available models
+	req, err = http.NewRequestWithContext(ctx, "GET", maasHost+"/maas-api/v1/models", nil)
+	if err != nil {
+		return fmt.Errorf("creating models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	modelsResp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("requesting MaaS models: %w", err)
+	}
+	defer modelsResp.Body.Close()
+
+	if modelsResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(modelsResp.Body)
+		return fmt.Errorf("MaaS models request failed (status %d): %s", modelsResp.StatusCode, string(body))
+	}
+
+	var models struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(modelsResp.Body).Decode(&models); err != nil {
+		return fmt.Errorf("decoding models response: %w", err)
+	}
+	if len(models.Data) == 0 {
+		return fmt.Errorf("no models available in MaaS response")
+	}
+	modelURL := models.Data[0].URL
+	log.Printf("[%s] Found model URL: %s", clusterName, modelURL)
+
+	// Create/update ConfigMap chat-openwebui in chat namespace
+	cm, err := spokeClientset.CoreV1().ConfigMaps("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "chat-openwebui",
+				Namespace: "chat",
+			},
+			Data: map[string]string{
+				"OPENAI_API_BASE_URLS": modelURL + "/v1",
+			},
+		}
+		if _, err := spokeClientset.CoreV1().ConfigMaps("chat").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("creating chat-openwebui configmap: %w", err)
+		}
+		log.Printf("[%s] Created chat-openwebui configmap in chat namespace", clusterName)
+	} else if err != nil {
+		return fmt.Errorf("checking chat-openwebui configmap: %w", err)
+	} else {
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data["OPENAI_API_BASE_URLS"] = modelURL + "/v1"
+		if _, err := spokeClientset.CoreV1().ConfigMaps("chat").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("updating chat-openwebui configmap: %w", err)
+		}
+		log.Printf("[%s] Updated chat-openwebui configmap in chat namespace", clusterName)
+	}
+
+	// Create/update Secret chat-openwebui in chat namespace
+	secret, err := spokeClientset.CoreV1().Secrets("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "chat-openwebui",
+				Namespace: "chat",
+			},
+			Data: map[string][]byte{
+				"OPENAI_API_KEYS": []byte(tokenResp.Token),
+			},
+		}
+		if _, err := spokeClientset.CoreV1().Secrets("chat").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("creating chat-openwebui secret: %w", err)
+		}
+		log.Printf("[%s] Created chat-openwebui secret in chat namespace", clusterName)
+	} else if err != nil {
+		return fmt.Errorf("checking chat-openwebui secret: %w", err)
+	} else {
+		if secret.Data == nil {
+			secret.Data = make(map[string][]byte)
+		}
+		secret.Data["OPENAI_API_KEYS"] = []byte(tokenResp.Token)
+		if _, err := spokeClientset.CoreV1().Secrets("chat").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("updating chat-openwebui secret: %w", err)
+		}
+		log.Printf("[%s] Updated chat-openwebui secret in chat namespace", clusterName)
+	}
+
+	// Restart chat pods
+	pods, err := spokeClientset.CoreV1().Pods("chat").List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=openwebui",
+	})
+	if err != nil {
+		return fmt.Errorf("listing chat pods: %w", err)
+	}
+	for _, pod := range pods.Items {
+		if err := spokeClientset.CoreV1().Pods("chat").Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+			log.Printf("[%s] Warning: failed to delete chat pod %s: %v", clusterName, pod.Name, err)
+		} else {
+			log.Printf("[%s] Deleted chat pod %s for restart", clusterName, pod.Name)
+		}
+	}
+
+	log.Printf("[%s] MaaS credentials updated successfully", clusterName)
 	return nil
 }
 
