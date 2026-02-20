@@ -191,14 +191,17 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
    TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token) && \
    ```
 
-   List available model:
+   List available models (may return multiple):
 
    ```bash
    MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $TOKEN" | jq -r .) && \
-   MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
+   MODEL_URLS=$(echo $MODELS | jq -r '[.data[].url] | map(. + "/v1") | join(";")')
+   TOKENS=$(echo $MODELS | jq -r '[.data[] | "'"$TOKEN"'"] | join(";")')
    ```
+
+   When multiple models are returned, the URLs and tokens are joined with `;` separators. Each model gets the same token.
 
    On the spoke cluster update the following configmap:
 
@@ -207,7 +210,7 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
 
    apiVersion: v1
    data:
-     OPENAI_API_BASE_URLS: $MODEL_URL/v1
+     OPENAI_API_BASE_URLS: "http://maas.example.com/model1/v1;http://maas.example.com/model2/v1"
    kind: ConfigMap
    metadata:
      name: chat-openwebui
@@ -215,13 +218,13 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
    ```
 
    On the spoke cluster update the following secret:
-  
+
    ```bash
    oc -n chat get secret chat-openwebui
 
    apiVersion: v1
    stringData:
-     OPENAI_API_KEYS: "$TOKEN"
+     OPENAI_API_KEYS: "token1;token1"
    kind: Secret
    metadata:
      name: chat-openwebui

@@ -719,8 +719,17 @@ func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interf
 	if len(models.Data) == 0 {
 		return fmt.Errorf("no models available in MaaS response")
 	}
-	modelURL := models.Data[0].URL
-	log.Printf("[%s] Found model URL: %s", clusterName, modelURL)
+
+	// Build semicolon-separated URL and token lists for all models
+	var modelURLs []string
+	var modelTokens []string
+	for _, m := range models.Data {
+		modelURLs = append(modelURLs, m.URL+"/v1")
+		modelTokens = append(modelTokens, tokenResp.Token)
+	}
+	apiBaseURLs := strings.Join(modelURLs, ";")
+	apiKeys := strings.Join(modelTokens, ";")
+	log.Printf("[%s] Found %d model(s): %s", clusterName, len(models.Data), apiBaseURLs)
 
 	// Create/update ConfigMap chat-openwebui in chat namespace
 	cm, err := spokeClientset.CoreV1().ConfigMaps("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
@@ -731,7 +740,7 @@ func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interf
 				Namespace: "chat",
 			},
 			Data: map[string]string{
-				"OPENAI_API_BASE_URLS": modelURL + "/v1",
+				"OPENAI_API_BASE_URLS": apiBaseURLs,
 			},
 		}
 		if _, err := spokeClientset.CoreV1().ConfigMaps("chat").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
@@ -744,7 +753,7 @@ func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interf
 		if cm.Data == nil {
 			cm.Data = make(map[string]string)
 		}
-		cm.Data["OPENAI_API_BASE_URLS"] = modelURL + "/v1"
+		cm.Data["OPENAI_API_BASE_URLS"] = apiBaseURLs
 		if _, err := spokeClientset.CoreV1().ConfigMaps("chat").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("updating chat-openwebui configmap: %w", err)
 		}
@@ -760,7 +769,7 @@ func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interf
 				Namespace: "chat",
 			},
 			Data: map[string][]byte{
-				"OPENAI_API_KEYS": []byte(tokenResp.Token),
+				"OPENAI_API_KEYS": []byte(apiKeys),
 			},
 		}
 		if _, err := spokeClientset.CoreV1().Secrets("chat").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
@@ -773,7 +782,7 @@ func updateMaaSCredentials(ctx context.Context, spokeClientset kubernetes.Interf
 		if secret.Data == nil {
 			secret.Data = make(map[string][]byte)
 		}
-		secret.Data["OPENAI_API_KEYS"] = []byte(tokenResp.Token)
+		secret.Data["OPENAI_API_KEYS"] = []byte(apiKeys)
 		if _, err := spokeClientset.CoreV1().Secrets("chat").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("updating chat-openwebui secret: %w", err)
 		}
