@@ -122,6 +122,19 @@ export async function getAdminData(): Promise<AdminResult | AdminError> {
   }
 }
 
+export async function checkClusterReady(phone: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/cluster/ready?phone=${encodeURIComponent(phone)}`
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.ready === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function claimCluster(
   phone: string,
   password: string,

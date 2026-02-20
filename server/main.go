@@ -41,6 +41,11 @@ var (
 		Version:  "v1",
 		Resource: "clusterdeployments",
 	}
+	clusterOperatorGVR = schema.GroupVersionResource{
+		Group:    "config.openshift.io",
+		Version:  "v1",
+		Resource: "clusteroperators",
+	}
 	clusterPoolNamespace  = "cluster-pools"
 	recaptchaVerifyURL    = "https://www.google.com/recaptcha/api/siteverify"
 	recaptchaMinScore     = 0.5
@@ -252,6 +257,9 @@ func main() {
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
 		handleClaim(w, r, dynClient, clientset, pool, lifetime)
+	})
+	mux.HandleFunc("/api/cluster/ready", func(w http.ResponseWriter, r *http.Request) {
+		handleClusterReady(w, r, dynClient, clientset, pool)
 	})
 	mux.HandleFunc("/api/admin/login", handleAdminLogin)
 	mux.HandleFunc("/api/admin", func(w http.ResponseWriter, r *http.Request) {
@@ -797,6 +805,136 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	_ = fmt.Sprintf("placeholder to use fmt import: %s", claimName)
 }
 
+// handleClusterReady checks if the authentication ClusterOperator on the spoke
+// cluster has Progressing=False, indicating the htpasswd identity provider is ready.
+func handleClusterReady(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	phone := sanitizePhone(r.URL.Query().Get("phone"))
+	if phone == "" {
+		http.Error(w, "Phone number is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Find the ClusterClaim with this phone label
+	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("Error listing cluster claims for ready check: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	var clusterName string
+	for _, claim := range claims.Items {
+		if !claimMatchesPool(claim.Object, clusterPool) {
+			continue
+		}
+		labels := claim.GetLabels()
+		if labels == nil {
+			continue
+		}
+		if labels["prelude"] == phone {
+			clusterName = getSpecNamespace(claim.Object)
+			break
+		}
+	}
+
+	if clusterName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	// Get ClusterDeployment to find admin kubeconfig
+	cd, err := dynClient.Resource(clusterDeploymentGVR).Namespace(clusterName).Get(ctx, clusterName, metav1.GetOptions{})
+	if err != nil {
+		log.Printf("Error getting ClusterDeployment for ready check: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	kubeconfigSecretName := ""
+	if spec, ok := cd.Object["spec"].(map[string]interface{}); ok {
+		if meta, ok := spec["clusterMetadata"].(map[string]interface{}); ok {
+			if ref, ok := meta["adminKubeconfigSecretRef"].(map[string]interface{}); ok {
+				if name, ok := ref["name"].(string); ok {
+					kubeconfigSecretName = name
+				}
+			}
+		}
+	}
+
+	if kubeconfigSecretName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	adminSecret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, kubeconfigSecretName, metav1.GetOptions{})
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	spokeKubeconfig := extractKubeconfig(adminSecret)
+	if spokeKubeconfig == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfig))
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	spokeDynClient, err := dynamic.NewForConfig(spokeConfig)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	// Check if the authentication ClusterOperator has Progressing=False
+	authCO, err := spokeDynClient.Resource(clusterOperatorGVR).Get(ctx, "authentication", metav1.GetOptions{})
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
+		return
+	}
+
+	ready := false
+	if status, ok := authCO.Object["status"].(map[string]interface{}); ok {
+		if conditions, ok := status["conditions"].([]interface{}); ok {
+			for _, c := range conditions {
+				cond, ok := c.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				condType, _ := cond["type"].(string)
+				condStatus, _ := cond["status"].(string)
+				if condType == "Progressing" && condStatus == "False" {
+					ready = true
+					break
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ready": ready})
+}
+
 // claimMatchesPool checks if a ClusterClaim belongs to the specified ClusterPool.
 func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 	spec, ok := obj["spec"].(map[string]interface{})
@@ -808,6 +946,19 @@ func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 		return false
 	}
 	return name == poolName
+}
+
+// getSpecNamespace returns spec.namespace from a ClusterClaim, or empty if not set.
+func getSpecNamespace(obj map[string]interface{}) string {
+	spec, ok := obj["spec"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	ns, ok := spec["namespace"].(string)
+	if !ok {
+		return ""
+	}
+	return ns
 }
 
 // unlabelClaim removes the prelude, prelude-auth, and prelude-fp labels from a ClusterClaim,

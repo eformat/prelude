@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from "firebase/auth";
 import { auth } from "./firebase";
-import { claimCluster } from "./actions";
+import { claimCluster, checkClusterReady } from "./actions";
 import { getFingerprint } from "./fingerprint";
 
 interface ClusterInfo {
@@ -152,11 +152,34 @@ function CountdownTimer({ expiresAt }: { expiresAt: string }) {
   );
 }
 
+function PreparingCountdown({ deadline }: { deadline: number }) {
+  const [secondsLeft, setSecondsLeft] = useState(() =>
+    Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+      if (remaining <= 0) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [deadline]);
+
+  return (
+    <span className="font-mono text-lg text-rh-gray-95 font-bold">
+      {secondsLeft}s
+    </span>
+  );
+}
+
 export default function Home() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [preparingDeadline, setPreparingDeadline] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -267,6 +290,19 @@ export default function Home() {
         return;
       }
 
+      const deadline = Date.now() + 60000;
+      setPreparingDeadline(deadline);
+      setPreparing(true);
+      setLoading(false);
+
+      // Poll until the authentication operator is ready or timeout after 60s
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const ready = await checkClusterReady(phone);
+        if (ready) break;
+      }
+
+      setPreparing(false);
       setCluster(result.data);
     } catch (err: unknown) {
       const firebaseError = err as { code?: string; message?: string };
@@ -531,6 +567,27 @@ export default function Home() {
         {/* Bottom edge transition */}
         <div className="h-px bg-gradient-to-r from-rh-red-50 via-rh-red-50/20 to-transparent" />
       </section>
+
+      {/* ── Preparing Cluster Spinner ── */}
+      {preparing && (
+        <section className="bg-rh-gray-10">
+          <div className="max-w-7xl mx-auto px-6 lg:px-8 py-24 lg:py-32">
+            <div className="flex flex-col items-center justify-center text-center animate-fade-in-up">
+              <svg className="animate-spin h-12 w-12 text-rh-red-50 mb-6" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <h2 className="font-rh-display text-rh-gray-95 text-2xl sm:text-3xl font-bold tracking-tight mb-3">
+                Preparing your cluster
+              </h2>
+              <p className="font-rh-text text-rh-gray-60 text-base max-w-md mb-4">
+                Setting up your Red Hat AI environment.
+              </p>
+              <PreparingCountdown deadline={preparingDeadline} />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ── Cluster Info Section ── */}
       {cluster && (
