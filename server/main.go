@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	mathrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -648,9 +649,11 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		}
 	}
 
-	// If not found, grab the first authenticated but unclaimed ClusterClaim and label it
+	// If not found, pick a random authenticated but unclaimed ClusterClaim and label it
 	if !found {
-		for _, claim := range claims.Items {
+		// Collect all available (authenticated, unclaimed) claim indices
+		var availableIndices []int
+		for i, claim := range claims.Items {
 			if !claimMatchesPool(claim.Object, clusterPool) {
 				continue
 			}
@@ -659,44 +662,52 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				continue
 			}
 			if labels["prelude"] == "" {
-				claimName = claim.GetName()
-				spec, ok := claim.Object["spec"].(map[string]interface{})
-				if ok {
-					ns, ok := spec["namespace"].(string)
-					if ok {
-						clusterName = ns
-					}
-				}
-
-				// Label the claim with the phone number and fingerprint
-				labels["prelude"] = phone
-				if fingerprint != "" {
-					labels["prelude-fp"] = fingerprint
-				}
-				claim.SetLabels(labels)
-
-				// Set spec.lifetime = age + configured lifetime
-				configuredDuration, err := parseDuration(clusterLifetime)
-				if err != nil {
-					log.Printf("Error parsing cluster lifetime %q: %v", clusterLifetime, err)
-					http.Error(w, "Invalid cluster lifetime configuration", http.StatusInternalServerError)
-					return
-				}
-				age := time.Since(claim.GetCreationTimestamp().Time)
-				totalLifetime := age + configuredDuration
-				spec["lifetime"] = formatDuration(totalLifetime)
-				expiresAt = claim.GetCreationTimestamp().Time.Add(totalLifetime)
-				log.Printf("Cluster claim %s age=%s, configured=%s, setting lifetime=%s", claimName, formatDuration(age), clusterLifetime, formatDuration(totalLifetime))
-
-				_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
-				if err != nil {
-					log.Printf("Error labeling cluster claim %s: %v", claimName, err)
-					http.Error(w, "Failed to assign cluster", http.StatusInternalServerError)
-					return
-				}
-				found = true
-				break
+				availableIndices = append(availableIndices, i)
 			}
+		}
+
+		if len(availableIndices) > 0 {
+			// Pick a random available claim
+			idx := availableIndices[mathrand.IntN(len(availableIndices))]
+			claim := claims.Items[idx]
+			labels := claim.GetLabels()
+
+			claimName = claim.GetName()
+			spec, ok := claim.Object["spec"].(map[string]interface{})
+			if ok {
+				ns, ok := spec["namespace"].(string)
+				if ok {
+					clusterName = ns
+				}
+			}
+
+			// Label the claim with the phone number and fingerprint
+			labels["prelude"] = phone
+			if fingerprint != "" {
+				labels["prelude-fp"] = fingerprint
+			}
+			claim.SetLabels(labels)
+
+			// Set spec.lifetime = age + configured lifetime
+			configuredDuration, err := parseDuration(clusterLifetime)
+			if err != nil {
+				log.Printf("Error parsing cluster lifetime %q: %v", clusterLifetime, err)
+				http.Error(w, "Invalid cluster lifetime configuration", http.StatusInternalServerError)
+				return
+			}
+			age := time.Since(claim.GetCreationTimestamp().Time)
+			totalLifetime := age + configuredDuration
+			spec["lifetime"] = formatDuration(totalLifetime)
+			expiresAt = claim.GetCreationTimestamp().Time.Add(totalLifetime)
+			log.Printf("Cluster claim %s age=%s, configured=%s, setting lifetime=%s (picked randomly from %d available)", claimName, formatDuration(age), clusterLifetime, formatDuration(totalLifetime), len(availableIndices))
+
+			_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, &claim, metav1.UpdateOptions{})
+			if err != nil {
+				log.Printf("Error labeling cluster claim %s: %v", claimName, err)
+				http.Error(w, "Failed to assign cluster", http.StatusInternalServerError)
+				return
+			}
+			found = true
 		}
 	}
 
