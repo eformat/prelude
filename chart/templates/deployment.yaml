@@ -33,6 +33,10 @@ spec:
         - name: server
           image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default "Always" }}
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
           env:
             {{- if .Values.server.kubeconfigSecret }}
             - name: KUBECONFIG

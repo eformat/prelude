@@ -31,3 +31,13 @@ client:
 
 route:
   host: ""
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  dashboard:
+    enabled: true
+    odc: false

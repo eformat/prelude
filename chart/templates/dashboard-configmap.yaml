@@ -1,0 +1,16 @@
+{{- if .Values.metrics.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prelude.fullname" . }}-dashboard
+  namespace: openshift-config-managed
+  labels:
+    {{- include "prelude.labels" . | nindent 4 }}
+    console.openshift.io/dashboard: "true"
+    {{- if .Values.metrics.dashboard.odc }}
+    console.openshift.io/odc-dashboard: "true"
+    {{- end }}
+data:
+  prelude-dashboard.json: |-
+    {{- .Files.Get "dashboards/prelude-dashboard.json" | nindent 4 }}
+{{- end }}

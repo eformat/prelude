@@ -170,6 +170,18 @@ The server performs the following steps after the htpasswd update:
 
 MaaS credential update failures are logged as warnings but do not prevent the user from receiving their cluster.
 
+### Prometheus Metrics
+
+The server exposes Prometheus metrics on `:9090/metrics`. A background goroutine computes cluster stats every 30 seconds and updates the following gauges:
+
+- `prelude_cluster_deployments` — ClusterDeployments matching the pool
+- `prelude_cluster_claims` — ClusterClaims matching the pool
+- `prelude_clusters_ready` — ClusterClaims with `prelude-auth=done`
+- `prelude_clusters_available` — ready clusters with no phone label (available for users)
+- `prelude_clusters_claimed` — ready clusters with a phone label (assigned to users)
+
+These are the same stats displayed on the admin dashboard. A Prometheus ServiceMonitor can be enabled via the Helm chart (see below).
+
 ## Cluster Claimer
 
 A separate Go binary (`cluster-claimer/`) that automates initial cluster provisioning and claiming. A native Go implementation that uses a Kubernetes watch for efficient event-driven waiting.
@@ -353,6 +365,7 @@ chart/
     ├── serviceaccount.yaml
     ├── clusterrole.yaml
     ├── clusterrolebinding.yaml
+    ├── servicemonitor.yaml      # Prometheus ServiceMonitor (optional)
     └── _helpers.tpl
 ```
 
@@ -392,6 +405,13 @@ client:
 
 route:
   host: ""                       # OpenShift Route hostname
+
+metrics:
+  serviceMonitor:
+    enabled: true                # Deploy a Prometheus ServiceMonitor
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}                   # Extra labels for the ServiceMonitor
 ```
 
 ### Deployment Architecture
@@ -399,7 +419,7 @@ route:
 The Deployment creates a single Pod with four containers:
 
 - **client** — port 3000, serves the Next.js app
-- **server** — Go API server (internal to pod, no exposed port)
+- **server** — Go API server (port 9090 for Prometheus metrics)
 - **cluster-claimer** — watches for provisioned ClusterDeployments and creates ClusterClaims
 - **cluster-authenticator** — processes bound ClusterClaims and prepares kubeconfig credentials
 

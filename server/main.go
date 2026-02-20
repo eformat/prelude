@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -63,6 +65,33 @@ var adminTokens = struct {
 	sync.RWMutex
 	m map[string]bool
 }{m: make(map[string]bool)}
+
+var (
+	metricDeployments = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_cluster_deployments",
+		Help: "Number of ClusterDeployments matching the pool",
+	})
+	metricClaims = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_cluster_claims",
+		Help: "Number of ClusterClaims matching the pool",
+	})
+	metricReady = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_clusters_ready",
+		Help: "Number of ClusterClaims with prelude-auth=done",
+	})
+	metricAvailable = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_clusters_available",
+		Help: "Number of ready ClusterClaims with no phone label",
+	})
+	metricClaimed = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_clusters_claimed",
+		Help: "Number of ready ClusterClaims with a phone label",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(metricDeployments, metricClaims, metricReady, metricAvailable, metricClaimed)
+}
 
 type adminLoginRequest struct {
 	Password string `json:"password"`
@@ -261,6 +290,34 @@ func main() {
 
 	pool := *clusterPool
 	lifetime := *clusterLifetime
+
+	// Background goroutine to update Prometheus metrics every 30s
+	go func() {
+		for {
+			stats, err := computeClusterStats(dynClient, pool)
+			if err != nil {
+				log.Printf("Error computing cluster stats for metrics: %v", err)
+			} else {
+				metricDeployments.Set(float64(stats.deployments))
+				metricClaims.Set(float64(stats.claims))
+				metricReady.Set(float64(stats.ready))
+				metricAvailable.Set(float64(stats.available))
+				metricClaimed.Set(float64(stats.claimed))
+			}
+			time.Sleep(30 * time.Second)
+		}
+	}()
+
+	// Metrics HTTP server on :9090
+	go func() {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.Handler())
+		log.Printf("Metrics server listening on :9090")
+		if err := http.ListenAndServe(":9090", metricsMux); err != nil {
+			log.Printf("Metrics server error: %v", err)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +431,49 @@ type adminDeploymentInfo struct {
 type adminResponse struct {
 	ClusterClaims      []adminClaimInfo      `json:"clusterClaims"`
 	ClusterDeployments []adminDeploymentInfo `json:"clusterDeployments"`
+}
+
+type clusterStats struct {
+	deployments int
+	claims      int
+	ready       int
+	available   int
+	claimed     int
+}
+
+func computeClusterStats(dynClient dynamic.Interface, pool string) (clusterStats, error) {
+	ctx := context.Background()
+	var s clusterStats
+
+	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return s, fmt.Errorf("listing ClusterClaims: %w", err)
+	}
+	for _, claim := range claims.Items {
+		if !claimMatchesPool(claim.Object, pool) {
+			continue
+		}
+		s.claims++
+		labels := claim.GetLabels()
+		if labels != nil && labels["prelude-auth"] == "done" {
+			s.ready++
+			if labels["prelude"] != "" {
+				s.claimed++
+			} else {
+				s.available++
+			}
+		}
+	}
+
+	deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool),
+	})
+	if err != nil {
+		return s, fmt.Errorf("listing ClusterDeployments: %w", err)
+	}
+	s.deployments = len(deployments.Items)
+
+	return s, nil
 }
 
 func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, pool string) {
