@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,8 @@ var recaptchaSecretKey string
 var recaptchaSiteKey string
 
 var adminPassword string
+var maasURL string
+var maasToken string
 var adminTokens = struct {
 	sync.RWMutex
 	m map[string]bool
@@ -228,6 +231,14 @@ func main() {
 		log.Printf("Admin page authentication enabled")
 	} else {
 		log.Printf("Admin page authentication disabled (ADMIN_PASSWORD not set)")
+	}
+
+	maasURL = os.Getenv("MAAS_URL")
+	maasToken = os.Getenv("MAAS_TOKEN")
+	if maasURL != "" && maasToken != "" {
+		log.Printf("MaaS credentials update enabled (url: %s)", maasURL)
+	} else {
+		log.Printf("MaaS credentials update disabled (MAAS_URL or MAAS_TOKEN not set)")
 	}
 
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
@@ -793,6 +804,13 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		return
 	}
 
+	// Update MaaS credentials on the spoke cluster if configured
+	if maasURL != "" && maasToken != "" {
+		if err := updateMaaSCredentials(adminKubeconfigData, maasURL, maasToken, clusterName, clusterLifetime); err != nil {
+			log.Printf("Warning: failed to update MaaS credentials on %s: %v", clusterName, err)
+		}
+	}
+
 	// Derive AI console URL by replacing console-openshift-console with data-science-gateway
 	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
 
@@ -1081,6 +1099,188 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 	}
 
 	log.Printf("Updated htpass-secret on spoke cluster")
+	return nil
+}
+
+// updateMaaSCredentials obtains a MaaS token, lists available models, and
+// updates the chat-openwebui ConfigMap and Secret on the spoke cluster.
+// The MaaS token expiration matches the cluster lifetime.
+func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterName, clusterLifetime string) error {
+	maasHost := strings.TrimRight(maasBaseURL, "/")
+
+	// Convert cluster lifetime to MaaS token expiration
+	lifetimeDuration, err := parseDuration(clusterLifetime)
+	if err != nil {
+		return fmt.Errorf("parsing cluster lifetime for MaaS token expiry: %w", err)
+	}
+	tokenExpiry := formatDuration(lifetimeDuration)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	// Obtain MaaS token
+	tokenBody := strings.NewReader(fmt.Sprintf(`{"expiration": "%s"}`, tokenExpiry))
+	req, err := http.NewRequestWithContext(context.Background(), "POST", maasHost+"/maas-api/v1/tokens", tokenBody)
+	if err != nil {
+		return fmt.Errorf("creating token request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+maasUserToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("requesting MaaS token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("MaaS token request failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return fmt.Errorf("decoding token response: %w", err)
+	}
+	if tokenResp.Token == "" {
+		return fmt.Errorf("empty token in MaaS response")
+	}
+	log.Printf("[%s] Obtained MaaS token (expiry: %s)", clusterName, tokenExpiry)
+
+	// List available models
+	req, err = http.NewRequestWithContext(context.Background(), "GET", maasHost+"/maas-api/v1/models", nil)
+	if err != nil {
+		return fmt.Errorf("creating models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	modelsResp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("requesting MaaS models: %w", err)
+	}
+	defer modelsResp.Body.Close()
+
+	if modelsResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(modelsResp.Body)
+		return fmt.Errorf("MaaS models request failed (status %d): %s", modelsResp.StatusCode, string(body))
+	}
+
+	var models struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(modelsResp.Body).Decode(&models); err != nil {
+		return fmt.Errorf("decoding models response: %w", err)
+	}
+	if len(models.Data) == 0 {
+		return fmt.Errorf("no models available in MaaS response")
+	}
+
+	// Build semicolon-separated URL and token lists for all models
+	var modelURLs []string
+	var modelTokens []string
+	for _, m := range models.Data {
+		modelURLs = append(modelURLs, m.URL+"/v1")
+		modelTokens = append(modelTokens, tokenResp.Token)
+	}
+	apiBaseURLs := strings.Join(modelURLs, ";")
+	apiKeys := strings.Join(modelTokens, ";")
+	log.Printf("[%s] Found %d model(s): %s", clusterName, len(models.Data), apiBaseURLs)
+
+	// Build spoke client
+	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfig))
+	if err != nil {
+		return fmt.Errorf("building spoke kubeconfig: %w", err)
+	}
+	spokeClient, err := kubernetes.NewForConfig(spokeConfig)
+	if err != nil {
+		return fmt.Errorf("creating spoke client: %w", err)
+	}
+
+	ctx := context.Background()
+
+	// Create/update ConfigMap chat-openwebui in chat namespace
+	cm, err := spokeClient.CoreV1().ConfigMaps("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "chat-openwebui",
+				Namespace: "chat",
+			},
+			Data: map[string]string{
+				"OPENAI_API_BASE_URLS": apiBaseURLs,
+			},
+		}
+		if _, err := spokeClient.CoreV1().ConfigMaps("chat").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("creating chat-openwebui configmap: %w", err)
+		}
+		log.Printf("[%s] Created chat-openwebui configmap in chat namespace", clusterName)
+	} else if err != nil {
+		return fmt.Errorf("checking chat-openwebui configmap: %w", err)
+	} else {
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data["OPENAI_API_BASE_URLS"] = apiBaseURLs
+		if _, err := spokeClient.CoreV1().ConfigMaps("chat").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("updating chat-openwebui configmap: %w", err)
+		}
+		log.Printf("[%s] Updated chat-openwebui configmap in chat namespace", clusterName)
+	}
+
+	// Create/update Secret chat-openwebui in chat namespace
+	secret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "chat-openwebui",
+				Namespace: "chat",
+			},
+			Data: map[string][]byte{
+				"OPENAI_API_KEYS": []byte(apiKeys),
+			},
+		}
+		if _, err := spokeClient.CoreV1().Secrets("chat").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("creating chat-openwebui secret: %w", err)
+		}
+		log.Printf("[%s] Created chat-openwebui secret in chat namespace", clusterName)
+	} else if err != nil {
+		return fmt.Errorf("checking chat-openwebui secret: %w", err)
+	} else {
+		if secret.Data == nil {
+			secret.Data = make(map[string][]byte)
+		}
+		secret.Data["OPENAI_API_KEYS"] = []byte(apiKeys)
+		if _, err := spokeClient.CoreV1().Secrets("chat").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("updating chat-openwebui secret: %w", err)
+		}
+		log.Printf("[%s] Updated chat-openwebui secret in chat namespace", clusterName)
+	}
+
+	// Restart chat pods
+	pods, err := spokeClient.CoreV1().Pods("chat").List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=openwebui",
+	})
+	if err != nil {
+		return fmt.Errorf("listing chat pods: %w", err)
+	}
+	for _, pod := range pods.Items {
+		if err := spokeClient.CoreV1().Pods("chat").Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+			log.Printf("[%s] Warning: failed to delete chat pod %s: %v", clusterName, pod.Name, err)
+		} else {
+			log.Printf("[%s] Deleted chat pod %s for restart", clusterName, pod.Name)
+		}
+	}
+
+	log.Printf("[%s] MaaS credentials updated successfully", clusterName)
 	return nil
 }
 

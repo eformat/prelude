@@ -54,6 +54,14 @@ spec:
             - name: ADMIN_PASSWORD
               value: "{{ .Values.server.adminPassword }}"
             {{- end }}
+            {{- if .Values.server.maasUrl }}
+            - name: MAAS_URL
+              value: "{{ .Values.server.maasUrl }}"
+            {{- end }}
+            {{- if .Values.server.maasToken }}
+            - name: MAAS_TOKEN
+              value: "{{ .Values.server.maasToken }}"
+            {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
@@ -92,14 +100,6 @@ spec:
             {{- end }}
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
-            {{- if .Values.clusterAuthenticator.maasUrl }}
-            - name: MAAS_URL
-              value: "{{ .Values.clusterAuthenticator.maasUrl }}"
-            {{- end }}
-            {{- if .Values.clusterAuthenticator.maasToken }}
-            - name: MAAS_TOKEN
-              value: "{{ .Values.clusterAuthenticator.maasToken }}"
-            {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig

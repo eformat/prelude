@@ -8,6 +8,8 @@ server:
   recaptchaSiteKey: ""
   recaptchaSecretKey: ""
   adminPassword: ""
+  maasUrl: ""
+  maasToken: ""
 
 clusterClaimer:
   image:
@@ -21,8 +23,6 @@ clusterAuthenticator:
   image:
     repository: quay.io/eformat/prelude-cluster-authenticator
     tag: latest
-  maasUrl: ""
-  maasToken: ""
 
 client:
   image:

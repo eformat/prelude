@@ -100,6 +100,76 @@ The server also returns an `expiresAt` field (RFC 3339 UTC timestamp) in the cla
 
 If all the ClusterClaim's have a label "prelude: phone-number", and we cannot match the provided phone number, then display a nice message to the user - "All our clusters are in use at the moment, try again later".
 
+### MaaS (Model as a Service) Credentials
+
+When a cluster is claimed, the server optionally updates Model as a Service (MaaS) credentials on the spoke cluster. This is done at claim time (not during cluster authentication) because the MaaS token is time-bound and should be active from the moment the user claims the cluster. The token expiration matches the `--cluster-lifetime` setting.
+
+MaaS is configured via environment variables on the server container (optional — if not set, MaaS updates are skipped):
+
+- `MAAS_URL` — MaaS API base URL, e.g. `https://maas.apps.example.com`
+- `MAAS_TOKEN` — MaaS user token for authentication
+
+The server performs the following steps after the htpasswd update:
+
+1. **Obtain a MaaS token** with expiration matching the cluster lifetime:
+
+   ```bash
+   TOKEN_RESPONSE=$(curl -sSk \
+    -H "Authorization: Bearer $MAAS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -X POST \
+    -d '{"expiration": "2h"}' \
+    "${MAAS_URL}/maas-api/v1/tokens") && \
+   TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
+   ```
+
+2. **List available models** (may return multiple):
+
+   ```bash
+   MODELS=$(curl -sSk ${MAAS_URL}/maas-api/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" | jq -r .) && \
+   MODEL_URLS=$(echo $MODELS | jq -r '[.data[].url] | map(. + "/v1") | join(";")')
+   TOKENS=$(echo $MODELS | jq -r '[.data[] | "'"$TOKEN"'"] | join(";")')
+   ```
+
+   When multiple models are returned, the URLs and tokens are joined with `;` separators. Each model gets the same token.
+
+3. **Update spoke cluster ConfigMap and Secret**:
+
+   ```bash
+   # ConfigMap
+   oc -n chat get cm chat-openwebui
+   apiVersion: v1
+   data:
+     OPENAI_API_BASE_URLS: "http://maas.example.com/model1/v1;http://maas.example.com/model2/v1"
+   kind: ConfigMap
+   metadata:
+     name: chat-openwebui
+     namespace: chat
+   ```
+
+   ```bash
+   # Secret
+   oc -n chat get secret chat-openwebui
+   apiVersion: v1
+   stringData:
+     OPENAI_API_KEYS: "token1;token1"
+   kind: Secret
+   metadata:
+     name: chat-openwebui
+     namespace: chat
+   type: Opaque
+   ```
+
+4. **Restart chat pods**:
+
+   ```bash
+   oc -n chat delete pod -l app.kubernetes.io/name=openwebui
+   ```
+
+MaaS credential update failures are logged as warnings but do not prevent the user from receiving their cluster.
+
 ## Cluster Claimer
 
 A separate Go binary (`cluster-claimer/`) that automates initial cluster provisioning and claiming. A native Go implementation that uses a Kubernetes watch for efficient event-driven waiting.
@@ -170,72 +240,6 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
    oc create secret generic htpass-secret \
        --from-literal=htpasswd="" \
        -n openshift-config
-   ```
-
-   We also need to update Model as a Service (MaaS) credentials as follows.
-
-   Obtain a MaaS token:
-
-   ```bash
-   CLUSTER_DOMAIN=apps.prelude-q8jzk.sandbox1763.opentlc.com
-   USER_TOKEN="to be provided"
-
-   HOST="https://maas.${CLUSTER_DOMAIN}"
-
-   TOKEN_RESPONSE=$(curl -sSk \
-    -H "Authorization: Bearer $USER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -X POST \
-    -d '{"expiration": "10m"}' \
-    "${HOST}/maas-api/v1/tokens") && \
-   TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token) && \
-   ```
-
-   List available models (may return multiple):
-
-   ```bash
-   MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $TOKEN" | jq -r .) && \
-   MODEL_URLS=$(echo $MODELS | jq -r '[.data[].url] | map(. + "/v1") | join(";")')
-   TOKENS=$(echo $MODELS | jq -r '[.data[] | "'"$TOKEN"'"] | join(";")')
-   ```
-
-   When multiple models are returned, the URLs and tokens are joined with `;` separators. Each model gets the same token.
-
-   On the spoke cluster update the following configmap:
-
-   ```bash
-   oc -n chat get cm chat-openwebui
-
-   apiVersion: v1
-   data:
-     OPENAI_API_BASE_URLS: "http://maas.example.com/model1/v1;http://maas.example.com/model2/v1"
-   kind: ConfigMap
-   metadata:
-     name: chat-openwebui
-     namespace: chat
-   ```
-
-   On the spoke cluster update the following secret:
-
-   ```bash
-   oc -n chat get secret chat-openwebui
-
-   apiVersion: v1
-   stringData:
-     OPENAI_API_KEYS: "token1;token1"
-   kind: Secret
-   metadata:
-     name: chat-openwebui
-     namespace: chat
-   type: Opaque
-   ```
-
-   Restart the chat pod:
-
-   ```bash
-   oc -n chat delete pod -l app.kubernetes.io/name=openwebui
    ```
 
 8. **Label claim as authenticated** — sets `prelude-auth=done` on the ClusterClaim, marking it as ready for users.
@@ -365,6 +369,8 @@ server:
   recaptchaSiteKey: ""
   recaptchaSecretKey: ""
   adminPassword: ""
+  maasUrl: ""
+  maasToken: ""
 
 clusterClaimer:
   image:
