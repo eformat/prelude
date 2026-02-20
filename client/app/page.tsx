@@ -296,7 +296,7 @@ export default function Home() {
       setLoading(false);
 
       // Wait for the authentication operator to start rolling before polling
-      await new Promise((resolve) => setTimeout(resolve, 10000));
+      await new Promise((resolve) => setTimeout(resolve, 20000));
 
       // Poll until the authentication operator is ready or timeout
       while (Date.now() < deadline) {
