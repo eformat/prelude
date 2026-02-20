@@ -138,17 +138,13 @@ func parseDuration(s string) (time.Duration, error) {
 	return total, nil
 }
 
-// formatDuration formats a duration using d, h, m units.
+// formatDuration formats a duration using h, m units (no days, since Kubernetes
+// duration fields only accept standard Go duration units: ns, us, ms, s, m, h).
 func formatDuration(d time.Duration) string {
 	if d <= 0 {
 		return "0m"
 	}
 	var parts []string
-	days := int(d.Hours()) / 24
-	if days > 0 {
-		parts = append(parts, fmt.Sprintf("%dd", days))
-		d -= time.Duration(days) * 24 * time.Hour
-	}
 	hours := int(d.Hours())
 	if hours > 0 {
 		parts = append(parts, fmt.Sprintf("%dh", hours))

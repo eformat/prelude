@@ -295,11 +295,14 @@ export default function Home() {
       setPreparing(true);
       setLoading(false);
 
-      // Poll until the authentication operator is ready or timeout after 60s
+      // Wait for the authentication operator to start rolling before polling
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+
+      // Poll until the authentication operator is ready or timeout
       while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
         const ready = await checkClusterReady(phone);
         if (ready) break;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
 
       setPreparing(false);
