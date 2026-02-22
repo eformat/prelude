@@ -260,6 +260,27 @@ The cluster-authenticator runs as a sidecar container in the same pod as the ser
 
 The server only considers ClusterClaims with the `prelude-auth=done` label when assigning clusters to users, ensuring users never receive a cluster that is still being prepared.
 
+## Cluster Signer Expiry 24hr
+
+We need to periodically check (1hr) each Available cluster for CSR signer expiry.
+
+OpenShift CSR signer is only valid for 24hr on first install. It is rotated to a 1 month valid signer a some interval 17-24 hours after the cluster is installed. We can check if this rotation has happened by running the following on a spoke cluster:
+
+```bash
+# check if csr signer expires within 25 days
+oc get secret/csr-signer -n openshift-kube-controller-manager-operator -o template='{{index .data "tls.crt"}}' | base64 -d | openssl x509 -checkend 2160000 -noout
+```
+
+If the signer has rolled we need to check that the system:admin and admin kubeconfig certs expiry:
+
+```bash
+cat prelude-kubeconfig.yaml | grep client-certificate-data | awk '{print $2}' | base64 -d | openssl x509 -noout -enddate
+# less than a day
+notAfter=Feb 21 02:03:21 2026 GMT
+```
+
+If they are short (less than a day) then we can regenerate them using after the CSR roll.
+
 
 ## Client Side
 
