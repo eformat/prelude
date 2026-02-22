@@ -39,6 +39,7 @@ func main() {
 	clusterClaimLimitStr := flag.String("cluster-claim-limit", os.Getenv("CLUSTER_CLAIM_LIMIT"), "Base number of ClusterClaims to create (default 4)")
 	clusterClaimMaxStr := flag.String("cluster-claim-max", os.Getenv("CLUSTER_CLAIM_MAX"), "Maximum number of ClusterClaims when scaling up (default 10)")
 	clusterClaimIncrementStr := flag.String("cluster-claim-increment", os.Getenv("CLUSTER_CLAIM_INCREMENT"), "Number of ClusterClaims to add when scaling up (default 1)")
+	clusterClaimAvailableThresholdStr := flag.String("cluster-claim-available-threshold", os.Getenv("CLUSTER_CLAIM_AVAILABLE_THRESHOLD"), "Available cluster count at which to trigger scale-up (default 1)")
 	flag.Parse()
 
 	if *clusterPool == "" {
@@ -67,13 +68,20 @@ func main() {
 			log.Fatalf("Invalid --cluster-claim-increment value: %s", *clusterClaimIncrementStr)
 		}
 	}
+	availableThreshold := 1
+	if *clusterClaimAvailableThresholdStr != "" {
+		n, err := fmt.Sscanf(*clusterClaimAvailableThresholdStr, "%d", &availableThreshold)
+		if n != 1 || err != nil {
+			log.Fatalf("Invalid --cluster-claim-available-threshold value: %s", *clusterClaimAvailableThresholdStr)
+		}
+	}
 
 	if claimMax < claimLimit {
 		claimMax = claimLimit
 	}
 
 	log.Printf("Cluster pool: %s", *clusterPool)
-	log.Printf("Cluster claim limit: %d (max: %d, increment: %d)", claimLimit, claimMax, claimIncrement)
+	log.Printf("Cluster claim limit: %d (max: %d, increment: %d, available threshold: %d)", claimLimit, claimMax, claimIncrement, availableThreshold)
 
 	config, err := buildConfig()
 	if err != nil {
@@ -105,7 +113,7 @@ func main() {
 	}
 
 	// Step 2: Reconcile loop — watch for changes and create claims as needed
-	reconcile(ctx, dynClient, pool, claimLimit, claimMax, claimIncrement)
+	reconcile(ctx, dynClient, pool, claimLimit, claimMax, claimIncrement, availableThreshold)
 	log.Printf("Cluster claimer shutting down")
 }
 
@@ -114,7 +122,7 @@ func main() {
 // limit starts at baseLimit and increases when no clusters are available,
 // up to maxLimit. It scales back down to baseLimit after clusters have been
 // available for 10 minutes (hysteresis).
-func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, baseLimit, maxLimit, increment int) {
+func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, baseLimit, maxLimit, increment, availableThreshold int) {
 	labelSelector := fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool)
 	effectiveLimit := baseLimit
 	var availableSince time.Time // when available clusters were first seen
@@ -129,8 +137,8 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, ba
 		available, err := countAvailableClaims(ctx, dynClient, pool)
 		if err != nil {
 			log.Printf("Error counting available claims: %v", err)
-		} else if available == 1 { // scale early rather than zero
-			// One available cluster — scale up (with 25min cooldown) and reset scale-down timer
+		} else if available <= availableThreshold {
+			// Available clusters at or below threshold — scale up (with 25min cooldown) and reset scale-down timer
 			availableSince = time.Time{}
 			if effectiveLimit < maxLimit {
 				if !lastScaleUp.IsZero() && time.Since(lastScaleUp) < 25*time.Minute {

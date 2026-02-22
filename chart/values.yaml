@@ -1,3 +1,5 @@
+replicas: 1
+
 server:
   image:
     repository: quay.io/eformat/prelude-server
@@ -18,6 +20,7 @@ clusterClaimer:
   clusterClaimLimit: "4"
   clusterClaimMax: "10"
   clusterClaimIncrement: "1"
+  clusterClaimAvailableThreshold: "1"
 
 clusterAuthenticator:
   image:

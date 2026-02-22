@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "prelude.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
       {{- include "prelude.selectorLabels" . | nindent 6 }}
@@ -88,6 +88,8 @@ spec:
               value: "{{ .Values.clusterClaimer.clusterClaimMax }}"
             - name: CLUSTER_CLAIM_INCREMENT
               value: "{{ .Values.clusterClaimer.clusterClaimIncrement }}"
+            - name: CLUSTER_CLAIM_AVAILABLE_THRESHOLD
+              value: "{{ .Values.clusterClaimer.clusterClaimAvailableThreshold }}"
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
