@@ -134,10 +134,10 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, ba
 		}
 
 		// Dynamic scaling of effective limit
-		available, err := countAvailableClaims(ctx, dynClient, pool)
+		available, ready, err := countAvailableAndReadyClaims(ctx, dynClient, pool)
 		if err != nil {
 			log.Printf("Error counting available claims: %v", err)
-		} else if available <= availableThreshold {
+		} else if available <= availableThreshold && ready > 0 {
 			// Available clusters at or below threshold — scale up (with 25min cooldown) and reset scale-down timer
 			availableSince = time.Time{}
 			if effectiveLimit < maxLimit {
@@ -314,25 +314,28 @@ func countClaimsForPool(ctx context.Context, dynClient dynamic.Interface, pool s
 	return count, nil
 }
 
-// countAvailableClaims counts ClusterClaims that are authenticated (prelude-auth=done)
-// but not yet claimed by a user (no prelude phone label).
-func countAvailableClaims(ctx context.Context, dynClient dynamic.Interface, pool string) (int, error) {
+// countAvailableAndReadyClaims counts ClusterClaims that are authenticated (prelude-auth=done)
+// but not yet claimed by a user (no prelude phone label), and also returns the total
+// number of ready (authenticated) clusters including claimed ones.
+func countAvailableAndReadyClaims(ctx context.Context, dynClient dynamic.Interface, pool string) (available int, ready int, err error) {
 	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("listing ClusterClaims: %w", err)
+		return 0, 0, fmt.Errorf("listing ClusterClaims: %w", err)
 	}
 
-	count := 0
 	for _, claim := range claims.Items {
 		if !claimMatchesPool(claim.Object, pool) {
 			continue
 		}
 		labels := claim.GetLabels()
-		if labels["prelude-auth"] == "done" && labels["prelude"] == "" {
-			count++
+		if labels["prelude-auth"] == "done" {
+			ready++
+			if labels["prelude"] == "" {
+				available++
+			}
 		}
 	}
-	return count, nil
+	return available, ready, nil
 }
 
 // existingClaimNames returns the set of ClusterClaim names that already exist for the pool.
