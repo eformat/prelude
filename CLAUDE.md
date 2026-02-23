@@ -363,9 +363,7 @@ To prevent users from claiming multiple clusters with different phone numbers, a
 
 The server stores the fingerprint as a `prelude-fp` label on the ClusterClaim. When a new claim is requested, the server checks if any existing claim has the same fingerprint but a different phone number, and rejects the request with a `device_already_claimed` error.
 
-The client also stores `{ phone, fingerprint }` in `localStorage` key `prelude-claim` for fast client-side pre-validation (avoids a server round-trip).
-
-**What it blocks:** Same browser/device with a different phone number (including incognito mode and cleared localStorage, since the server-side check is authoritative).
+**What it blocks:** Same browser/device with a different phone number (including incognito mode, since the server-side check is authoritative).
 
 **What it allows:** Different browser or different device (acceptable trade-off).
 
