@@ -280,7 +280,7 @@ cat prelude-kubeconfig.yaml | grep client-certificate-data | awk '{print $2}' | 
 notAfter=Feb 21 02:03:21 2026 GMT
 ```
 
-If they are short (less than a day) then we can regenerate them using after the CSR roll.
+If they are short (less than a day) then we can regenerate them after the CSR roll.
 
 
 ## Client Side
