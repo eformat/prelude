@@ -265,7 +265,7 @@ The server only considers ClusterClaims with the `prelude-auth=done` label when 
 
 We need to periodically check (1hr) each Available cluster for CSR signer expiry.
 
-OpenShift CSR signer is only valid for 24hr on first install. It is rotated to a 1 month valid signer a some interval 17-24 hours after the cluster is installed. We can check if this rotation has happened by running the following on a spoke cluster:
+OpenShift CSR signer is only valid for 24hr on first install. It is rotated to a 1 month valid signer at some interval 17-24 hours after the cluster is installed. We can check if this rotation has happened by running the following on a spoke cluster:
 
 ```bash
 # check if csr signer expires within 25 days
