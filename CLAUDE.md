@@ -301,7 +301,7 @@ Google Analytics is enabled via the Next.js `<Script>` component in the root lay
 
 Phone numbers are verified via SMS using Firebase Authentication before a cluster is claimed. The flow is a two-step process:
 
-1. **Send verification code** — the user enters their phone number (with country code, e.g. `+1234567890`) and admin password. The client creates a Firebase `RecaptchaVerifier` (invisible mode, attached to the submit button) and calls `signInWithPhoneNumber()` to send an SMS code.
+1. **Send verification code** — the user enters their phone number (with country code, e.g. `+1234567890`) and admin password. The client creates a Firebase `RecaptchaVerifier` (invisible reCAPTCHA v2, attached to the submit button) and calls `signInWithPhoneNumber()` to send an SMS code. The reCAPTCHA v2 widget is managed entirely by Firebase and requires no additional configuration.
 
 2. **Verify code & claim** — the user enters the 6-digit SMS code. The client calls `confirmationResult.confirm(code)` to verify with Firebase. On success, it generates the browser fingerprint, executes the reCAPTCHA v3 token, and calls the `claimCluster` server action.
 
@@ -330,12 +330,15 @@ The page auto-refreshes every 30 seconds with a manual refresh button.
 
 ### reCAPTCHA
 
-Google reCAPTCHA v3 protects the app endpoints from bots. It is optional -- if the env vars are not set, verification is skipped.
+The app uses two separate reCAPTCHA integrations:
 
-Both env vars are set on the Go server container:
+- **reCAPTCHA v2 (invisible)** — used by Firebase `RecaptchaVerifier` for phone number SMS verification. This is managed entirely by the Firebase SDK and requires no app-level configuration or env vars.
+- **reCAPTCHA v3** — used independently to score the `/api/claim` request via `react-google-recaptcha-v3` on the client and Google's `siteverify` API on the server (minimum score: 0.5). This is optional -- if the env vars are not set, verification is skipped.
+
+The reCAPTCHA v3 env vars are set on the Go server container:
 
 - `RECAPTCHA_SITE_KEY` — reCAPTCHA v3 site key (public). Served to the client at runtime via the `GET /api/config` endpoint.
-- `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA verification is disabled.
+- `RECAPTCHA_SECRET_KEY` — reCAPTCHA v3 secret key. Used server-side to verify tokens. When empty, reCAPTCHA v3 verification is disabled.
 
 ### Admin Authentication
 
