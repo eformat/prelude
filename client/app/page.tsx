@@ -173,8 +173,81 @@ function PreparingCountdown({ deadline }: { deadline: number }) {
   );
 }
 
+const COUNTRIES = [
+  { code: "US", dial: "+1", name: "United States", flag: "\u{1F1FA}\u{1F1F8}" },
+  { code: "AU", dial: "+61", name: "Australia", flag: "\u{1F1E6}\u{1F1FA}" },
+  { code: "AF", dial: "+93", name: "Afghanistan", flag: "\u{1F1E6}\u{1F1EB}" },
+  { code: "AL", dial: "+355", name: "Albania", flag: "\u{1F1E6}\u{1F1F1}" },
+  { code: "DZ", dial: "+213", name: "Algeria", flag: "\u{1F1E9}\u{1F1FF}" },
+  { code: "AR", dial: "+54", name: "Argentina", flag: "\u{1F1E6}\u{1F1F7}" },
+  { code: "AT", dial: "+43", name: "Austria", flag: "\u{1F1E6}\u{1F1F9}" },
+  { code: "BD", dial: "+880", name: "Bangladesh", flag: "\u{1F1E7}\u{1F1E9}" },
+  { code: "BE", dial: "+32", name: "Belgium", flag: "\u{1F1E7}\u{1F1EA}" },
+  { code: "BR", dial: "+55", name: "Brazil", flag: "\u{1F1E7}\u{1F1F7}" },
+  { code: "CA", dial: "+1", name: "Canada", flag: "\u{1F1E8}\u{1F1E6}" },
+  { code: "CL", dial: "+56", name: "Chile", flag: "\u{1F1E8}\u{1F1F1}" },
+  { code: "CN", dial: "+86", name: "China", flag: "\u{1F1E8}\u{1F1F3}" },
+  { code: "CO", dial: "+57", name: "Colombia", flag: "\u{1F1E8}\u{1F1F4}" },
+  { code: "CZ", dial: "+420", name: "Czech Republic", flag: "\u{1F1E8}\u{1F1FF}" },
+  { code: "DK", dial: "+45", name: "Denmark", flag: "\u{1F1E9}\u{1F1F0}" },
+  { code: "EG", dial: "+20", name: "Egypt", flag: "\u{1F1EA}\u{1F1EC}" },
+  { code: "FI", dial: "+358", name: "Finland", flag: "\u{1F1EB}\u{1F1EE}" },
+  { code: "FR", dial: "+33", name: "France", flag: "\u{1F1EB}\u{1F1F7}" },
+  { code: "DE", dial: "+49", name: "Germany", flag: "\u{1F1E9}\u{1F1EA}" },
+  { code: "GH", dial: "+233", name: "Ghana", flag: "\u{1F1EC}\u{1F1ED}" },
+  { code: "GR", dial: "+30", name: "Greece", flag: "\u{1F1EC}\u{1F1F7}" },
+  { code: "HK", dial: "+852", name: "Hong Kong", flag: "\u{1F1ED}\u{1F1F0}" },
+  { code: "HU", dial: "+36", name: "Hungary", flag: "\u{1F1ED}\u{1F1FA}" },
+  { code: "IN", dial: "+91", name: "India", flag: "\u{1F1EE}\u{1F1F3}" },
+  { code: "ID", dial: "+62", name: "Indonesia", flag: "\u{1F1EE}\u{1F1E9}" },
+  { code: "IE", dial: "+353", name: "Ireland", flag: "\u{1F1EE}\u{1F1EA}" },
+  { code: "IL", dial: "+972", name: "Israel", flag: "\u{1F1EE}\u{1F1F1}" },
+  { code: "IT", dial: "+39", name: "Italy", flag: "\u{1F1EE}\u{1F1F9}" },
+  { code: "JP", dial: "+81", name: "Japan", flag: "\u{1F1EF}\u{1F1F5}" },
+  { code: "KE", dial: "+254", name: "Kenya", flag: "\u{1F1F0}\u{1F1EA}" },
+  { code: "KR", dial: "+82", name: "South Korea", flag: "\u{1F1F0}\u{1F1F7}" },
+  { code: "MY", dial: "+60", name: "Malaysia", flag: "\u{1F1F2}\u{1F1FE}" },
+  { code: "MX", dial: "+52", name: "Mexico", flag: "\u{1F1F2}\u{1F1FD}" },
+  { code: "NL", dial: "+31", name: "Netherlands", flag: "\u{1F1F3}\u{1F1F1}" },
+  { code: "NZ", dial: "+64", name: "New Zealand", flag: "\u{1F1F3}\u{1F1FF}" },
+  { code: "NG", dial: "+234", name: "Nigeria", flag: "\u{1F1F3}\u{1F1EC}" },
+  { code: "NO", dial: "+47", name: "Norway", flag: "\u{1F1F3}\u{1F1F4}" },
+  { code: "PK", dial: "+92", name: "Pakistan", flag: "\u{1F1F5}\u{1F1F0}" },
+  { code: "PE", dial: "+51", name: "Peru", flag: "\u{1F1F5}\u{1F1EA}" },
+  { code: "PH", dial: "+63", name: "Philippines", flag: "\u{1F1F5}\u{1F1ED}" },
+  { code: "PL", dial: "+48", name: "Poland", flag: "\u{1F1F5}\u{1F1F1}" },
+  { code: "PT", dial: "+351", name: "Portugal", flag: "\u{1F1F5}\u{1F1F9}" },
+  { code: "RO", dial: "+40", name: "Romania", flag: "\u{1F1F7}\u{1F1F4}" },
+  { code: "SA", dial: "+966", name: "Saudi Arabia", flag: "\u{1F1F8}\u{1F1E6}" },
+  { code: "SG", dial: "+65", name: "Singapore", flag: "\u{1F1F8}\u{1F1EC}" },
+  { code: "ZA", dial: "+27", name: "South Africa", flag: "\u{1F1FF}\u{1F1E6}" },
+  { code: "ES", dial: "+34", name: "Spain", flag: "\u{1F1EA}\u{1F1F8}" },
+  { code: "SE", dial: "+46", name: "Sweden", flag: "\u{1F1F8}\u{1F1EA}" },
+  { code: "CH", dial: "+41", name: "Switzerland", flag: "\u{1F1E8}\u{1F1ED}" },
+  { code: "TW", dial: "+886", name: "Taiwan", flag: "\u{1F1F9}\u{1F1FC}" },
+  { code: "TH", dial: "+66", name: "Thailand", flag: "\u{1F1F9}\u{1F1ED}" },
+  { code: "TR", dial: "+90", name: "Turkey", flag: "\u{1F1F9}\u{1F1F7}" },
+  { code: "UA", dial: "+380", name: "Ukraine", flag: "\u{1F1FA}\u{1F1E6}" },
+  { code: "AE", dial: "+971", name: "United Arab Emirates", flag: "\u{1F1E6}\u{1F1EA}" },
+  { code: "GB", dial: "+44", name: "United Kingdom", flag: "\u{1F1EC}\u{1F1E7}" },
+  { code: "VN", dial: "+84", name: "Vietnam", flag: "\u{1F1FB}\u{1F1F3}" },
+];
+
+function ChevronDownIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function Home() {
   const [phone, setPhone] = useState("");
+  const [selectedCountry, setSelectedCountry] = useState(COUNTRIES[0]);
+  const [countryDropdownOpen, setCountryDropdownOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState("");
+  const countryDropdownRef = useRef<HTMLDivElement>(null);
+  const countrySearchRef = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
@@ -188,6 +261,36 @@ export default function Home() {
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const { executeRecaptcha } = useGoogleReCaptcha();
+
+  // Close country dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (countryDropdownRef.current && !countryDropdownRef.current.contains(e.target as Node)) {
+        setCountryDropdownOpen(false);
+        setCountrySearch("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Focus search input when dropdown opens
+  useEffect(() => {
+    if (countryDropdownOpen && countrySearchRef.current) {
+      countrySearchRef.current.focus();
+    }
+  }, [countryDropdownOpen]);
+
+  const filteredCountries = countrySearch
+    ? COUNTRIES.filter(
+        (c) =>
+          c.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
+          c.dial.includes(countrySearch) ||
+          c.code.toLowerCase().includes(countrySearch.toLowerCase())
+      )
+    : COUNTRIES;
+
+  const fullPhoneNumber = `${selectedCountry.dial}${phone.replace(/\D/g, "")}`;
 
   function validatePhone(value: string): string | null {
     const digits = value.replace(/\D/g, "");
@@ -214,9 +317,6 @@ export default function Home() {
     setLoading(true);
 
     try {
-      // Format phone number with + prefix if not present
-      const formattedPhone = phone.startsWith("+") ? phone : `+${phone.replace(/\D/g, "")}`;
-
       // Clean up any existing verifier
       if (recaptchaVerifierRef.current) {
         recaptchaVerifierRef.current.clear();
@@ -228,7 +328,7 @@ export default function Home() {
       });
       recaptchaVerifierRef.current = verifier;
 
-      const result = await signInWithPhoneNumber(auth, formattedPhone, verifier);
+      const result = await signInWithPhoneNumber(auth, fullPhoneNumber, verifier);
       setConfirmationResult(result);
       setStep("verify");
     } catch (err: unknown) {
@@ -239,7 +339,7 @@ export default function Home() {
       }
       const firebaseError = err as { code?: string; message?: string };
       if (firebaseError.code === "auth/invalid-phone-number") {
-        setError("Invalid phone number. Please include your country code (e.g. +1 for US).");
+        setError("Invalid phone number. Please check the number and try again.");
       } else if (firebaseError.code === "auth/too-many-requests") {
         setError("Too many attempts. Please try again later.");
       } else if (firebaseError.code === "auth/quota-exceeded") {
@@ -283,7 +383,7 @@ export default function Home() {
         // reCAPTCHA not available, continue without token
       }
 
-      const result = await claimCluster(phone, password, recaptchaToken, fingerprint);
+      const result = await claimCluster(fullPhoneNumber, password, recaptchaToken, fingerprint);
 
       if (!result.success) {
         setError(result.error);
@@ -410,15 +510,66 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-4 max-w-xl">
                   <div className="flex flex-col sm:flex-row gap-4">
-                    <div className="flex-1 relative">
+                    <div className="flex-1 relative flex">
                       <label htmlFor="phone" className="sr-only">Phone number</label>
+                      <div className="relative" ref={countryDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setCountryDropdownOpen(!countryDropdownOpen)}
+                          className="flex items-center gap-2 px-4 py-4 bg-rh-gray-90 border border-rh-gray-70 border-r-0 text-white font-rh-text text-base hover:bg-rh-gray-80 transition-colors whitespace-nowrap h-full"
+                          aria-label="Select country code"
+                        >
+                          <span className="text-lg leading-none">{selectedCountry.flag}</span>
+                          <span className="text-rh-gray-30">{selectedCountry.dial}</span>
+                          <ChevronDownIcon />
+                        </button>
+                        {countryDropdownOpen && (
+                          <div className="absolute top-full left-0 mt-1 w-72 bg-rh-gray-90 border border-rh-gray-70 shadow-xl z-50 max-h-64 overflow-hidden flex flex-col">
+                            <div className="p-2 border-b border-rh-gray-70">
+                              <input
+                                ref={countrySearchRef}
+                                type="text"
+                                value={countrySearch}
+                                onChange={(e) => setCountrySearch(e.target.value)}
+                                placeholder="Search countries..."
+                                className="w-full px-3 py-2 bg-rh-gray-80 border border-rh-gray-70 text-white font-rh-text text-sm placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 transition-colors"
+                              />
+                            </div>
+                            <div className="overflow-y-auto">
+                              {filteredCountries.map((country) => (
+                                <button
+                                  key={country.code}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCountry(country);
+                                    setCountryDropdownOpen(false);
+                                    setCountrySearch("");
+                                  }}
+                                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-rh-gray-80 transition-colors ${
+                                    selectedCountry.code === country.code ? "bg-rh-gray-80" : ""
+                                  }`}
+                                >
+                                  <span className="text-lg leading-none">{country.flag}</span>
+                                  <span className="font-rh-text text-white text-sm flex-1 truncate">{country.name}</span>
+                                  <span className="font-rh-text text-rh-gray-40 text-sm">{country.dial}</span>
+                                </button>
+                              ))}
+                              {filteredCountries.length === 0 && (
+                                <div className="px-4 py-3 font-rh-text text-rh-gray-50 text-sm">
+                                  No countries found
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                       <input
                         id="phone"
                         type="tel"
                         value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        placeholder="Enter phone number (e.g. +1234567890)"
-                        className="w-full px-5 py-4 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
+                        onChange={(e) => setPhone(e.target.value.replace(/[^\d\s\-()]/g, ""))}
+                        placeholder="Phone number"
+                        className="flex-1 min-w-0 px-4 py-4 bg-rh-gray-90 border border-rh-gray-70 text-white font-rh-text text-base placeholder-rh-gray-50 focus:outline-none focus:border-rh-red-50 focus:ring-1 focus:ring-rh-red-50 transition-colors"
                         required
                       />
                     </div>
@@ -474,7 +625,10 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-4 max-w-xl">
                   <div className="px-5 py-3 bg-rh-gray-90 border border-rh-gray-70 flex items-center justify-between">
-                    <span className="font-rh-text text-white text-base">{phone}</span>
+                    <span className="font-rh-text text-white text-base">
+                      <span className="text-lg mr-2">{selectedCountry.flag}</span>
+                      {selectedCountry.dial} {phone}
+                    </span>
                     <button
                       type="button"
                       onClick={handleBackToInput}
