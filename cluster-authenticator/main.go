@@ -720,10 +720,14 @@ func extractKubeconfig(secret *corev1.Secret) string {
 // checkSignerExpiry periodically checks available clusters for CSR signer
 // certificate rotation and regenerates kubeconfig certs when needed.
 func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
-	// Run immediately on startup, then every hour
+	// Track clusters whose CSR signer has already rolled (expiry > 25 days).
+	// Once confirmed rolled, no need to check again.
+	signerRolled := make(map[string]bool)
+
+	// Run immediately on startup, then every 10 minutes
 	for {
 		log.Printf("Checking CSR signer expiry for available clusters")
 		claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
@@ -754,9 +758,18 @@ func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubC
 					continue
 				}
 
+				// Skip clusters whose signer has already rolled
+				if signerRolled[clusterName] {
+					continue
+				}
+
 				claimName := claim.GetName()
-				if err := checkAndRenewCerts(ctx, hubDynClient, hubClientset, claimName, clusterName); err != nil {
+				rolled, err := checkAndRenewCerts(ctx, hubDynClient, hubClientset, claimName, clusterName)
+				if err != nil {
 					log.Printf("Warning: [%s] signer expiry check failed: %v", clusterName, err)
+				} else if rolled {
+					log.Printf("[%s] CSR signer confirmed rolled, skipping future checks", clusterName)
+					signerRolled[clusterName] = true
 				}
 			}
 		}
@@ -771,42 +784,43 @@ func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubC
 
 // checkAndRenewCerts checks if the CSR signer has rolled on a spoke cluster
 // and regenerates kubeconfig client certificates if they have short expiry.
-func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, claimName, clusterName string) error {
+// Returns true if the signer has rolled (expiry > 25 days), false otherwise.
+func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, claimName, clusterName string) (bool, error) {
 	// Get ClusterDeployment and admin kubeconfig secret from hub
 	cd, err := hubDynClient.Resource(clusterDeploymentGVR).Namespace(clusterName).Get(ctx, clusterName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("getting ClusterDeployment: %w", err)
+		return false, fmt.Errorf("getting ClusterDeployment: %w", err)
 	}
 
 	adminSecretName := getAdminKubeconfigSecretName(cd.Object)
 	if adminSecretName == "" {
-		return fmt.Errorf("could not find adminKubeconfigSecretRef in ClusterDeployment %s", clusterName)
+		return false, fmt.Errorf("could not find adminKubeconfigSecretRef in ClusterDeployment %s", clusterName)
 	}
 
 	adminSecret, err := hubClientset.CoreV1().Secrets(clusterName).Get(ctx, adminSecretName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("getting admin kubeconfig secret: %w", err)
+		return false, fmt.Errorf("getting admin kubeconfig secret: %w", err)
 	}
 
 	spokeKubeconfigData := extractKubeconfig(adminSecret)
 	if spokeKubeconfigData == "" {
-		return fmt.Errorf("admin kubeconfig secret %s has no kubeconfig data", adminSecretName)
+		return false, fmt.Errorf("admin kubeconfig secret %s has no kubeconfig data", adminSecretName)
 	}
 
 	// Check admin kubeconfig client cert expiry first (cheap, no spoke call needed)
 	clientCertPEM, err := extractClientCertFromKubeconfig(spokeKubeconfigData)
 	if err != nil {
-		return fmt.Errorf("extracting client cert from kubeconfig: %w", err)
+		return false, fmt.Errorf("extracting client cert from kubeconfig: %w", err)
 	}
 
 	clientCertExpiry, err := parseCertExpiry(clientCertPEM)
 	if err != nil {
-		return fmt.Errorf("parsing client cert expiry: %w", err)
+		return false, fmt.Errorf("parsing client cert expiry: %w", err)
 	}
 
 	// If client cert expires in more than 1 day, no renewal needed
 	if time.Until(clientCertExpiry) > 24*time.Hour {
-		return nil
+		return false, nil
 	}
 
 	log.Printf("[%s] Client cert expires at %s (within 1 day), checking CSR signer", clusterName, clientCertExpiry.Format(time.RFC3339))
@@ -814,7 +828,7 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 	// Build spoke client to check CSR signer
 	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfigData))
 	if err != nil {
-		return fmt.Errorf("building spoke REST config: %w", err)
+		return false, fmt.Errorf("building spoke REST config: %w", err)
 	}
 	spokeConfig.TLSClientConfig.Insecure = true
 	spokeConfig.TLSClientConfig.CAData = nil
@@ -822,29 +836,29 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 
 	spokeClientset, err := kubernetes.NewForConfig(spokeConfig)
 	if err != nil {
-		return fmt.Errorf("creating spoke client: %w", err)
+		return false, fmt.Errorf("creating spoke client: %w", err)
 	}
 
 	// Check CSR signer expiry on spoke
 	signerSecret, err := spokeClientset.CoreV1().Secrets("openshift-kube-controller-manager-operator").Get(ctx, "csr-signer", metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("getting csr-signer secret: %w", err)
+		return false, fmt.Errorf("getting csr-signer secret: %w", err)
 	}
 
 	signerCertPEM, ok := signerSecret.Data["tls.crt"]
 	if !ok {
-		return fmt.Errorf("csr-signer secret has no tls.crt data")
+		return false, fmt.Errorf("csr-signer secret has no tls.crt data")
 	}
 
 	signerExpiry, err := parseCertExpiry(signerCertPEM)
 	if err != nil {
-		return fmt.Errorf("parsing csr-signer cert expiry: %w", err)
+		return false, fmt.Errorf("parsing csr-signer cert expiry: %w", err)
 	}
 
 	// If signer expires within 25 days (2,160,000 seconds), it hasn't rolled yet
 	if time.Until(signerExpiry) <= 25*24*time.Hour {
 		log.Printf("[%s] CSR signer expires at %s (within 25 days), signer hasn't rolled yet — skipping", clusterName, signerExpiry.Format(time.RFC3339))
-		return nil
+		return false, nil
 	}
 
 	log.Printf("[%s] CSR signer has rolled (expires %s), regenerating kubeconfig certs", clusterName, signerExpiry.Format(time.RFC3339))
@@ -853,7 +867,7 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 	log.Printf("[%s] Regenerating system:admin kubeconfig", clusterName)
 	adminKubeconfig, err := regenerateKubeconfig(ctx, spokeClientset, spokeConfig, "system:admin", "auth2kube-systemadmin-access", nil)
 	if err != nil {
-		return fmt.Errorf("regenerating system:admin kubeconfig: %w", err)
+		return false, fmt.Errorf("regenerating system:admin kubeconfig: %w", err)
 	}
 
 	// Update admin kubeconfig secret on hub
@@ -861,25 +875,25 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 	adminSecret.Data["kubeconfig"] = []byte(adminKubeconfig)
 	adminSecret.Data["raw-kubeconfig"] = []byte(adminKubeconfig)
 	if _, err := hubClientset.CoreV1().Secrets(clusterName).Update(ctx, adminSecret, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("updating admin kubeconfig secret: %w", err)
+		return false, fmt.Errorf("updating admin kubeconfig secret: %w", err)
 	}
 
 	// Regenerate admin user kubeconfig
 	log.Printf("[%s] Regenerating admin user kubeconfig", clusterName)
 	userKubeconfig, err := regenerateKubeconfig(ctx, spokeClientset, spokeConfig, "admin", "auth2kube-admin-access", []string{"admin"})
 	if err != nil {
-		return fmt.Errorf("regenerating admin user kubeconfig: %w", err)
+		return false, fmt.Errorf("regenerating admin user kubeconfig: %w", err)
 	}
 
 	// Create/update user kubeconfig secret on hub
 	userSecretName := strings.Replace(adminSecretName, "-admin-kubeconfig", "-user-kubeconfig", 1)
 	log.Printf("[%s] Updating user kubeconfig secret %s on hub", clusterName, userSecretName)
 	if err := createOrUpdateSecret(ctx, hubClientset, clusterName, userSecretName, userKubeconfig); err != nil {
-		return fmt.Errorf("creating/updating user kubeconfig secret: %w", err)
+		return false, fmt.Errorf("creating/updating user kubeconfig secret: %w", err)
 	}
 
 	log.Printf("[%s] Successfully regenerated kubeconfig certs after CSR signer roll", clusterName)
-	return nil
+	return true, nil
 }
 
 // parseCertExpiry decodes PEM certificate data and returns the NotAfter time.
