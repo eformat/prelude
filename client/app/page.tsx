@@ -12,6 +12,7 @@ interface ClusterInfo {
   aiConsoleURL: string;
   kubeconfig: string;
   expiresAt: string;
+  passwordChanged: boolean;
 }
 
 function CopyIcon() {
@@ -390,22 +391,26 @@ export default function Home() {
         return;
       }
 
-      const deadline = Date.now() + 60000;
-      setPreparingDeadline(deadline);
-      setPreparing(true);
-      setLoading(false);
+      if (result.data.passwordChanged) {
+        // Password was changed — wait for authentication operator to roll
+        const deadline = Date.now() + 60000;
+        setPreparingDeadline(deadline);
+        setPreparing(true);
+        setLoading(false);
 
-      // Wait for the authentication operator to start rolling before polling
-      await new Promise((resolve) => setTimeout(resolve, 20000));
+        // Wait for the authentication operator to start rolling before polling
+        await new Promise((resolve) => setTimeout(resolve, 20000));
 
-      // Poll until the authentication operator is ready or timeout
-      while (Date.now() < deadline) {
-        const ready = await checkClusterReady(phone);
-        if (ready) break;
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        // Poll until the authentication operator is ready or timeout
+        while (Date.now() < deadline) {
+          const ready = await checkClusterReady(phone);
+          if (ready) break;
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+
+        setPreparing(false);
       }
 
-      setPreparing(false);
       setCluster(result.data);
     } catch (err: unknown) {
       const firebaseError = err as { code?: string; message?: string };

@@ -194,10 +194,11 @@ func formatDuration(d time.Duration) string {
 }
 
 type claimResponse struct {
-	WebConsoleURL string `json:"webConsoleURL"`
-	AIConsoleURL  string `json:"aiConsoleURL"`
-	Kubeconfig    string `json:"kubeconfig"`
-	ExpiresAt     string `json:"expiresAt"`
+	WebConsoleURL   string `json:"webConsoleURL"`
+	AIConsoleURL    string `json:"aiConsoleURL"`
+	Kubeconfig      string `json:"kubeconfig"`
+	ExpiresAt       string `json:"expiresAt"`
+	PasswordChanged bool   `json:"passwordChanged"`
 }
 
 type recaptchaResponse struct {
@@ -888,7 +889,8 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	userKubeconfigData := extractKubeconfig(userSecret)
 
 	// Generate htpasswd entry and update the spoke cluster's htpass-secret (using admin kubeconfig)
-	if err := updateHtpasswd(adminKubeconfigData, password); err != nil {
+	passwordChanged, err := updateHtpasswd(adminKubeconfigData, password)
+	if err != nil {
 		log.Printf("Error updating htpasswd on spoke cluster %s: %v", clusterName, err)
 
 		// Spoke cluster is unreachable (likely deprovisioning) — remove labels so it's
@@ -915,10 +917,11 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
 
 	resp := claimResponse{
-		WebConsoleURL: webConsoleURL,
-		AIConsoleURL:  aiConsoleURL,
-		Kubeconfig:    userKubeconfigData,
-		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
+		WebConsoleURL:   webConsoleURL,
+		AIConsoleURL:    aiConsoleURL,
+		Kubeconfig:      userKubeconfigData,
+		ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
+		PasswordChanged: passwordChanged,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1129,11 +1132,11 @@ func extractKubeconfig(secret *corev1.Secret) string {
 
 // updateHtpasswd generates an htpasswd entry for "admin" with the given password
 // and updates the htpass-secret in openshift-config on the spoke cluster.
-func updateHtpasswd(spokeKubeconfig string, password string) error {
+func updateHtpasswd(spokeKubeconfig string, password string) (bool, error) {
 	// Generate bcrypt hash (equivalent to: htpasswd -bBc /tmp/htpasswd admin password)
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return fmt.Errorf("generating bcrypt hash: %w", err)
+		return false, fmt.Errorf("generating bcrypt hash: %w", err)
 	}
 	htpasswdEntry := fmt.Sprintf("admin:%s\n", string(hash))
 	log.Printf("Generated htpasswd entry for admin user")
@@ -1141,13 +1144,13 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 	// Build a client for the spoke cluster using its kubeconfig
 	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfig))
 	if err != nil {
-		return fmt.Errorf("building spoke kubeconfig: %w", err)
+		return false, fmt.Errorf("building spoke kubeconfig: %w", err)
 	}
 	log.Printf("Connecting to spoke cluster at %s", spokeConfig.Host)
 
 	spokeClient, err := kubernetes.NewForConfig(spokeConfig)
 	if err != nil {
-		return fmt.Errorf("creating spoke client: %w", err)
+		return false, fmt.Errorf("creating spoke client: %w", err)
 	}
 
 	ctx := context.Background()
@@ -1167,12 +1170,12 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 		}
 		_, err = spokeClient.CoreV1().Secrets("openshift-config").Create(ctx, secret, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("creating htpass-secret: %w", err)
+			return false, fmt.Errorf("creating htpass-secret: %w", err)
 		}
 		log.Printf("Created htpass-secret on spoke cluster")
-		return nil
+		return true, nil
 	} else if err != nil {
-		return fmt.Errorf("getting htpass-secret: %w", err)
+		return false, fmt.Errorf("getting htpass-secret: %w", err)
 	}
 
 	// Check if the existing password already matches
@@ -1182,7 +1185,7 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 		if parts := strings.SplitN(strings.TrimSpace(string(existing)), ":", 2); len(parts) == 2 {
 			if bcrypt.CompareHashAndPassword([]byte(parts[1]), []byte(password)) == nil {
 				log.Printf("htpass-secret already has matching password, skipping update")
-				return nil
+				return false, nil
 			}
 		}
 	}
@@ -1195,11 +1198,11 @@ func updateHtpasswd(spokeKubeconfig string, password string) error {
 
 	_, err = spokeClient.CoreV1().Secrets("openshift-config").Update(ctx, secret, metav1.UpdateOptions{})
 	if err != nil {
-		return fmt.Errorf("updating htpass-secret: %w", err)
+		return false, fmt.Errorf("updating htpass-secret: %w", err)
 	}
 
 	log.Printf("Updated htpass-secret on spoke cluster")
-	return nil
+	return true, nil
 }
 
 // updateMaaSCredentials obtains a MaaS token, lists available models, and

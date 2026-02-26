@@ -12,6 +12,7 @@ interface ClaimResult {
     aiConsoleURL: string;
     kubeconfig: string;
     expiresAt: string;
+    passwordChanged: boolean;
   };
 }
 
