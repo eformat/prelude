@@ -54,7 +54,7 @@ We look up both the admin and user kubeconfig secrets from the spoke cluster. Th
 - Admin kubeconfig secret: `prelude-q8jzk-txg6b-0-dqfqp-admin-kubeconfig`
 - User kubeconfig secret: `prelude-q8jzk-txg6b-0-dqfqp-user-kubeconfig`
 
-The admin kubeconfig is used internally to update the htpasswd secret on the spoke cluster. The user kubeconfig is returned to the client.
+The admin kubeconfig is used internally for cluster operations. The user kubeconfig is (optionally) returned to the client.
 
 ```bash
 CLUSTER_NAME=prelude-q8jzk
@@ -84,18 +84,6 @@ CLUSTER_CLAIM_NAME=road1
 oc -n cluster-pools label clusterclaim.hive.openshift.io $CLUSTER_CLAIM_NAME prelude-
 ```
 
-The admin password the user enters is written into an htpasswd secret. To generate htpasswd, the equivalent command line is:
-
-```bash
-htpasswd -bBc /tmp/htpasswd admin password
-```
-
-This must be stored in the spoke cluster using the returned spoke cluster KUBECONFIG. The htpass-secret is created if it does not exist, or updated if it does. The equivalent command line is:
-
-```bash
-oc get secret htpass-secret -n openshift-config -o template='{{ .data }}'
-```
-
 The server also returns an `expiresAt` field (RFC 3339 UTC timestamp) in the claim response, computed as the ClusterClaim's `creationTimestamp` plus `spec.lifetime`. For already-claimed clusters (phone number matches an existing label), the expiry is read from the existing `spec.lifetime`. For newly-claimed clusters, it uses the freshly computed lifetime.
 
 If all the ClusterClaim's have a label "prelude: phone-number", and we cannot match the provided phone number, then display a nice message to the user - "All our clusters are in use at the moment, try again later".
@@ -109,7 +97,7 @@ MaaS is configured via environment variables on the server container (optional �
 - `MAAS_URL` — MaaS API base URL, e.g. `https://maas.apps.example.com`
 - `MAAS_TOKEN` — MaaS user token for authentication
 
-The server performs the following steps after the htpasswd update:
+The server performs the following steps when MaaS is configured:
 
 1. **Obtain a MaaS token** with expiration matching the cluster lifetime:
 
@@ -246,13 +234,10 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
 
 6. **Create/update user kubeconfig secret on hub** — derives the user kubeconfig secret name (replacing `-admin-kubeconfig` with `-user-kubeconfig`), creates or updates the secret with the regenerated user kubeconfig.
 
-7. **Create spoke resources** — using the new system:admin kubeconfig, creates on the spoke cluster (if they don't already exist):
+7. **Create spoke resources** — using the new system:admin kubeconfig, creates on the spoke cluster (if it doesn't already exist):
 
    ```bash
    oc create configmap prelude -n openshift-config
-   oc create secret generic htpass-secret \
-       --from-literal=htpasswd="" \
-       -n openshift-config
    ```
 
 8. **Label claim as authenticated** — sets `prelude-auth=done` on the ClusterClaim, marking it as ready for users.

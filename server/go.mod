@@ -4,7 +4,6 @@ go 1.24.12
 
 require (
 	github.com/prometheus/client_golang v1.23.2
-	golang.org/x/crypto v0.48.0
 	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
 	k8s.io/client-go v0.32.3

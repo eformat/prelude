@@ -12,7 +12,6 @@ interface ClaimResult {
     aiConsoleURL: string;
     kubeconfig: string;
     expiresAt: string;
-    passwordChanged: boolean;
   };
 }
 
@@ -120,19 +119,6 @@ export async function getAdminData(): Promise<AdminResult | AdminError> {
     return { success: true, data };
   } catch {
     return { success: false, error: "Failed to connect to cluster service" };
-  }
-}
-
-export async function checkClusterReady(phone: string): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `${API_URL}/api/cluster/ready?phone=${encodeURIComponent(phone)}`
-    );
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.ready === true;
-  } catch {
-    return false;
   }
 }
 

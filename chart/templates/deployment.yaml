@@ -70,10 +70,6 @@ spec:
             - name: MAAS_TOKEN
               value: "{{ .Values.server.maasToken }}"
             {{- end }}
-            {{- if not .Values.clusterAuthenticator.createHtpassSecret }}
-            - name: CREATE_HTPASS_SECRET
-              value: "false"
-            {{- end }}
             {{- if .Values.clusterAuthenticator.keycloakUrl }}
             - name: KEYCLOAK_URL
               value: "{{ .Values.clusterAuthenticator.keycloakUrl }}"
@@ -129,10 +125,6 @@ spec:
             {{- if .Values.clusterAuthenticator.keycloakClientSecret }}
             - name: KEYCLOAK_CLIENT_SECRET
               value: "{{ .Values.clusterAuthenticator.keycloakClientSecret }}"
-            {{- end }}
-            {{- if not .Values.clusterAuthenticator.createHtpassSecret }}
-            - name: CREATE_HTPASS_SECRET
-              value: "false"
             {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:

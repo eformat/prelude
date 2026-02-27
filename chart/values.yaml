@@ -29,7 +29,6 @@ clusterAuthenticator:
     tag: latest
   keycloakUrl: ""
   keycloakClientSecret: ""
-  createHtpassSecret: false
 
 client:
   image:

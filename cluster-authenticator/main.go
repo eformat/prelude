@@ -124,16 +124,10 @@ var consoleGVR = schema.GroupVersionResource{
 	Resource: "consoles",
 }
 
-var createHtpassSecret = true
 var keycloakURL string
 var keycloakClientSecret string
 
 func main() {
-	if v := os.Getenv("CREATE_HTPASS_SECRET"); v == "false" {
-		createHtpassSecret = false
-		log.Printf("htpass-secret creation disabled (CREATE_HTPASS_SECRET=false)")
-	}
-
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
 	flag.Parse()
 
@@ -745,32 +739,6 @@ func createSpokeResources(ctx context.Context, spokeClientset kubernetes.Interfa
 		return fmt.Errorf("checking prelude configmap: %w", err)
 	} else {
 		log.Printf("[%s] Prelude configmap already exists in openshift-config", clusterName)
-	}
-
-	// Create secret htpass-secret in openshift-config (if not exists)
-	if createHtpassSecret {
-		_, err = spokeClientset.CoreV1().Secrets("openshift-config").Get(ctx, "htpass-secret", metav1.GetOptions{})
-		if k8serrors.IsNotFound(err) {
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "htpass-secret",
-					Namespace: "openshift-config",
-				},
-				Data: map[string][]byte{
-					"htpasswd": []byte(""),
-				},
-			}
-			if _, err := spokeClientset.CoreV1().Secrets("openshift-config").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-				return fmt.Errorf("creating htpass-secret: %w", err)
-			}
-			log.Printf("[%s] Created htpass-secret in openshift-config", clusterName)
-		} else if err != nil {
-			return fmt.Errorf("checking htpass-secret: %w", err)
-		} else {
-			log.Printf("[%s] htpass-secret already exists in openshift-config", clusterName)
-		}
-	} else {
-		log.Printf("[%s] Skipping htpass-secret creation (disabled)", clusterName)
 	}
 
 	return nil

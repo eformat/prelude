@@ -23,7 +23,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,11 +44,6 @@ var (
 		Version:  "v1",
 		Resource: "clusterdeployments",
 	}
-	clusterOperatorGVR = schema.GroupVersionResource{
-		Group:    "config.openshift.io",
-		Version:  "v1",
-		Resource: "clusteroperators",
-	}
 	clusterPoolNamespace  = "cluster-pools"
 	recaptchaVerifyURL    = "https://www.google.com/recaptcha/api/siteverify"
 	recaptchaMinScore     = 0.5
@@ -58,7 +52,6 @@ var (
 var recaptchaSecretKey string
 var recaptchaSiteKey string
 var hideKubeconfig bool
-var createHtpassSecret = true
 
 var adminPassword string
 var maasURL string
@@ -198,11 +191,10 @@ func formatDuration(d time.Duration) string {
 }
 
 type claimResponse struct {
-	WebConsoleURL   string `json:"webConsoleURL"`
-	AIConsoleURL    string `json:"aiConsoleURL"`
-	Kubeconfig      string `json:"kubeconfig"`
-	ExpiresAt       string `json:"expiresAt"`
-	PasswordChanged bool   `json:"passwordChanged"`
+	WebConsoleURL string `json:"webConsoleURL"`
+	AIConsoleURL  string `json:"aiConsoleURL"`
+	Kubeconfig    string `json:"kubeconfig"`
+	ExpiresAt     string `json:"expiresAt"`
 }
 
 type recaptchaResponse struct {
@@ -257,10 +249,6 @@ func main() {
 	hideKubeconfig = os.Getenv("HIDE_KUBECONFIG") == "true"
 	if hideKubeconfig {
 		log.Printf("Kubeconfig display hidden from client")
-	}
-	if os.Getenv("CREATE_HTPASS_SECRET") == "false" {
-		createHtpassSecret = false
-		log.Printf("htpass-secret creation disabled (CREATE_HTPASS_SECRET=false)")
 	}
 	if recaptchaSecretKey != "" {
 		log.Printf("reCAPTCHA verification enabled")
@@ -344,9 +332,6 @@ func main() {
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
 		handleClaim(w, r, dynClient, clientset, pool, lifetime)
 	})
-	mux.HandleFunc("/api/cluster/ready", func(w http.ResponseWriter, r *http.Request) {
-		handleClusterReady(w, r, dynClient, clientset, pool)
-	})
 	mux.HandleFunc("/api/admin/login", handleAdminLogin)
 	mux.HandleFunc("/api/admin", func(w http.ResponseWriter, r *http.Request) {
 		handleAdmin(w, r, dynClient, pool)
@@ -363,9 +348,8 @@ func main() {
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"recaptchaSiteKey":   recaptchaSiteKey,
-		"hideKubeconfig":     hideKubeconfig,
-		"createHtpassSecret": createHtpassSecret,
+		"recaptchaSiteKey": recaptchaSiteKey,
+		"hideKubeconfig":   hideKubeconfig,
 	})
 }
 
@@ -887,7 +871,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		return
 	}
 
-	// Get the admin kubeconfig secret (used for htpasswd update)
+	// Get the admin kubeconfig secret
 	adminSecret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, kubeconfigSecretName, metav1.GetOptions{})
 	if err != nil {
 		log.Printf("Error getting admin kubeconfig secret %s/%s: %v", clusterName, kubeconfigSecretName, err)
@@ -910,24 +894,6 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 	userKubeconfigData := extractKubeconfig(userSecret)
 
-	// Generate htpasswd entry and update the spoke cluster's htpass-secret (using admin kubeconfig)
-	passwordChanged, err := updateHtpasswd(adminKubeconfigData, password)
-	if err != nil {
-		log.Printf("Error updating htpasswd on spoke cluster %s: %v", clusterName, err)
-
-		// Spoke cluster is unreachable (likely deprovisioning) — remove labels so it's
-		// no longer considered available and the user can get a different cluster.
-		log.Printf("Removing prelude and prelude-auth labels from claim %s (cluster unreachable)", claimName)
-		unlabelClaim(ctx, dynClient, claimName)
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "cluster_unavailable",
-		})
-		return
-	}
-
 	// Update MaaS credentials on the spoke cluster if configured
 	if maasURL != "" && maasToken != "" {
 		if err := updateMaaSCredentials(adminKubeconfigData, maasURL, maasToken, clusterName, clusterLifetime); err != nil {
@@ -946,11 +912,10 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
 
 	resp := claimResponse{
-		WebConsoleURL:   webConsoleURL,
-		AIConsoleURL:    aiConsoleURL,
-		Kubeconfig:      userKubeconfigData,
-		ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
-		PasswordChanged: passwordChanged,
+		WebConsoleURL: webConsoleURL,
+		AIConsoleURL:  aiConsoleURL,
+		Kubeconfig:    userKubeconfigData,
+		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -959,144 +924,6 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	}
 
 	log.Printf("Assigned cluster %s (claim: %s) to phone %s", clusterName, claimName, phone)
-	_ = fmt.Sprintf("placeholder to use fmt import: %s", claimName)
-}
-
-// handleClusterReady checks if the authentication ClusterOperator on the spoke
-// cluster has Progressing=False, indicating the htpasswd identity provider is ready.
-// When htpass-secret creation is disabled (SSO mode), the cluster is always ready.
-func handleClusterReady(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if !createHtpassSecret {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": true})
-		return
-	}
-
-	phone := sanitizePhone(r.URL.Query().Get("phone"))
-	if phone == "" {
-		http.Error(w, "Phone number is required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := context.Background()
-
-	// Find the ClusterClaim with this phone label
-	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		log.Printf("Error listing cluster claims for ready check: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	var clusterName string
-	for _, claim := range claims.Items {
-		if !claimMatchesPool(claim.Object, clusterPool) {
-			continue
-		}
-		labels := claim.GetLabels()
-		if labels == nil {
-			continue
-		}
-		if labels["prelude"] == phone {
-			clusterName = getSpecNamespace(claim.Object)
-			break
-		}
-	}
-
-	if clusterName == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	// Get ClusterDeployment to find admin kubeconfig
-	cd, err := dynClient.Resource(clusterDeploymentGVR).Namespace(clusterName).Get(ctx, clusterName, metav1.GetOptions{})
-	if err != nil {
-		log.Printf("Error getting ClusterDeployment for ready check: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	kubeconfigSecretName := ""
-	if spec, ok := cd.Object["spec"].(map[string]interface{}); ok {
-		if meta, ok := spec["clusterMetadata"].(map[string]interface{}); ok {
-			if ref, ok := meta["adminKubeconfigSecretRef"].(map[string]interface{}); ok {
-				if name, ok := ref["name"].(string); ok {
-					kubeconfigSecretName = name
-				}
-			}
-		}
-	}
-
-	if kubeconfigSecretName == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	adminSecret, err := clientset.CoreV1().Secrets(clusterName).Get(ctx, kubeconfigSecretName, metav1.GetOptions{})
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	spokeKubeconfig := extractKubeconfig(adminSecret)
-	if spokeKubeconfig == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfig))
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	spokeDynClient, err := dynamic.NewForConfig(spokeConfig)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	// Check if the authentication ClusterOperator has Progressing=False
-	authCO, err := spokeDynClient.Resource(clusterOperatorGVR).Get(ctx, "authentication", metav1.GetOptions{})
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ready": false})
-		return
-	}
-
-	ready := false
-	if status, ok := authCO.Object["status"].(map[string]interface{}); ok {
-		if conditions, ok := status["conditions"].([]interface{}); ok {
-			for _, c := range conditions {
-				cond, ok := c.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				condType, _ := cond["type"].(string)
-				condStatus, _ := cond["status"].(string)
-				if condType == "Progressing" && condStatus == "False" {
-					ready = true
-					break
-				}
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ready": ready})
 }
 
 // claimMatchesPool checks if a ClusterClaim belongs to the specified ClusterPool.
@@ -1110,40 +937,6 @@ func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 		return false
 	}
 	return name == poolName
-}
-
-// getSpecNamespace returns spec.namespace from a ClusterClaim, or empty if not set.
-func getSpecNamespace(obj map[string]interface{}) string {
-	spec, ok := obj["spec"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	ns, ok := spec["namespace"].(string)
-	if !ok {
-		return ""
-	}
-	return ns
-}
-
-// unlabelClaim removes the prelude, prelude-auth, and prelude-fp labels from a ClusterClaim,
-// making it unavailable for assignment. Used when the spoke cluster is unreachable.
-func unlabelClaim(ctx context.Context, dynClient dynamic.Interface, claimName string) {
-	claim, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Get(ctx, claimName, metav1.GetOptions{})
-	if err != nil {
-		log.Printf("Error fetching claim %s for unlabeling: %v", claimName, err)
-		return
-	}
-	labels := claim.GetLabels()
-	delete(labels, "prelude")
-	delete(labels, "prelude-auth")
-	delete(labels, "prelude-fp")
-	claim.SetLabels(labels)
-	_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
-	if err != nil {
-		log.Printf("Error unlabeling claim %s: %v", claimName, err)
-		return
-	}
-	log.Printf("Unlabeled claim %s (removed prelude, prelude-auth, prelude-fp, prelude-sso)", claimName)
 }
 
 // extractKubeconfig reads kubeconfig data from a Secret, handling common key names
@@ -1164,81 +957,6 @@ func extractKubeconfig(secret *corev1.Secret) string {
 		data = string(decoded)
 	}
 	return data
-}
-
-// updateHtpasswd generates an htpasswd entry for "admin" with the given password
-// and updates the htpass-secret in openshift-config on the spoke cluster.
-func updateHtpasswd(spokeKubeconfig string, password string) (bool, error) {
-	// Generate bcrypt hash (equivalent to: htpasswd -bBc /tmp/htpasswd admin password)
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return false, fmt.Errorf("generating bcrypt hash: %w", err)
-	}
-	htpasswdEntry := fmt.Sprintf("admin:%s\n", string(hash))
-	log.Printf("Generated htpasswd entry for admin user")
-
-	// Build a client for the spoke cluster using its kubeconfig
-	spokeConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(spokeKubeconfig))
-	if err != nil {
-		return false, fmt.Errorf("building spoke kubeconfig: %w", err)
-	}
-	log.Printf("Connecting to spoke cluster at %s", spokeConfig.Host)
-
-	spokeClient, err := kubernetes.NewForConfig(spokeConfig)
-	if err != nil {
-		return false, fmt.Errorf("creating spoke client: %w", err)
-	}
-
-	ctx := context.Background()
-
-	// Try to get the existing htpass-secret, create it if it doesn't exist
-	secret, err := spokeClient.CoreV1().Secrets("openshift-config").Get(ctx, "htpass-secret", metav1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		log.Printf("htpass-secret not found on spoke cluster, creating it")
-		secret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "htpass-secret",
-				Namespace: "openshift-config",
-			},
-			Data: map[string][]byte{
-				"htpasswd": []byte(htpasswdEntry),
-			},
-		}
-		_, err = spokeClient.CoreV1().Secrets("openshift-config").Create(ctx, secret, metav1.CreateOptions{})
-		if err != nil {
-			return false, fmt.Errorf("creating htpass-secret: %w", err)
-		}
-		log.Printf("Created htpass-secret on spoke cluster")
-		return true, nil
-	} else if err != nil {
-		return false, fmt.Errorf("getting htpass-secret: %w", err)
-	}
-
-	// Check if the existing password already matches
-	log.Printf("Existing htpass-secret found, data keys: %v", secretDataKeys(secret))
-	if existing, ok := secret.Data["htpasswd"]; ok {
-		// htpasswd format is "admin:<hash>\n", extract the hash
-		if parts := strings.SplitN(strings.TrimSpace(string(existing)), ":", 2); len(parts) == 2 {
-			if bcrypt.CompareHashAndPassword([]byte(parts[1]), []byte(password)) == nil {
-				log.Printf("htpass-secret already has matching password, skipping update")
-				return false, nil
-			}
-		}
-	}
-
-	// Update the htpasswd data
-	if secret.Data == nil {
-		secret.Data = make(map[string][]byte)
-	}
-	secret.Data["htpasswd"] = []byte(htpasswdEntry)
-
-	_, err = spokeClient.CoreV1().Secrets("openshift-config").Update(ctx, secret, metav1.UpdateOptions{})
-	if err != nil {
-		return false, fmt.Errorf("updating htpass-secret: %w", err)
-	}
-
-	log.Printf("Updated htpass-secret on spoke cluster")
-	return true, nil
 }
 
 // updateMaaSCredentials obtains a MaaS token, lists available models, and
@@ -1508,14 +1226,6 @@ func updateKeycloakPassword(kcURL, realmName, clientSecret, newPassword string) 
 
 	log.Printf("[%s] Keycloak admin password updated", realmName)
 	return nil
-}
-
-func secretDataKeys(s *corev1.Secret) []string {
-	keys := make([]string, 0, len(s.Data))
-	for k := range s.Data {
-		keys = append(keys, k)
-	}
-	return keys
 }
 
 // buildConfig returns a Kubernetes REST config. It uses the KUBECONFIG env var
