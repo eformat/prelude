@@ -252,6 +252,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [hideKubeconfig, setHideKubeconfig] = useState(false);
+  const [htpassEnabled, setHtpassEnabled] = useState(true);
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [preparingDeadline, setPreparingDeadline] = useState(0);
@@ -271,6 +272,9 @@ export default function Home() {
       .then((data) => {
         if (data.hideKubeconfig) {
           setHideKubeconfig(true);
+        }
+        if (data.createHtpassSecret === false) {
+          setHtpassEnabled(false);
         }
       })
       .catch(() => {});
@@ -404,7 +408,7 @@ export default function Home() {
         return;
       }
 
-      if (result.data.passwordChanged) {
+      if (result.data.passwordChanged && htpassEnabled) {
         // Password was changed — wait for authentication operator to roll
         const deadline = Date.now() + 60000;
         setPreparingDeadline(deadline);

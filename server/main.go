@@ -58,6 +58,7 @@ var (
 var recaptchaSecretKey string
 var recaptchaSiteKey string
 var hideKubeconfig bool
+var createHtpassSecret = true
 
 var adminPassword string
 var maasURL string
@@ -255,6 +256,10 @@ func main() {
 	if hideKubeconfig {
 		log.Printf("Kubeconfig display hidden from client")
 	}
+	if os.Getenv("CREATE_HTPASS_SECRET") == "false" {
+		createHtpassSecret = false
+		log.Printf("htpass-secret creation disabled (CREATE_HTPASS_SECRET=false)")
+	}
 	if recaptchaSecretKey != "" {
 		log.Printf("reCAPTCHA verification enabled")
 	} else {
@@ -348,8 +353,9 @@ func main() {
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"recaptchaSiteKey": recaptchaSiteKey,
-		"hideKubeconfig":   hideKubeconfig,
+		"recaptchaSiteKey":   recaptchaSiteKey,
+		"hideKubeconfig":     hideKubeconfig,
+		"createHtpassSecret": createHtpassSecret,
 	})
 }
 
@@ -949,9 +955,16 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 // handleClusterReady checks if the authentication ClusterOperator on the spoke
 // cluster has Progressing=False, indicating the htpasswd identity provider is ready.
+// When htpass-secret creation is disabled (SSO mode), the cluster is always ready.
 func handleClusterReady(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !createHtpassSecret {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ready": true})
 		return
 	}
 

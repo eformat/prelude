@@ -70,6 +70,10 @@ spec:
             - name: MAAS_TOKEN
               value: "{{ .Values.server.maasToken }}"
             {{- end }}
+            {{- if not .Values.clusterAuthenticator.createHtpassSecret }}
+            - name: CREATE_HTPASS_SECRET
+              value: "false"
+            {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig
