@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -208,8 +209,11 @@ func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset
 	}
 }
 
+// inFlight tracks claims currently being processed to avoid duplicate goroutines.
+var inFlight sync.Map
+
 // processUnauthenticatedClaims finds bound ClusterClaims without the
-// prelude-auth=done label and processes them.
+// prelude-auth=done label and launches a goroutine for each.
 func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
 	claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -239,20 +243,29 @@ func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Inte
 		}
 
 		claimName := claim.GetName()
+
+		// Skip if already being processed
+		if _, loaded := inFlight.LoadOrStore(claimName, true); loaded {
+			continue
+		}
+
 		log.Printf("Processing unauthenticated claim %s (cluster: %s)", claimName, clusterName)
 
-		if err := authenticateCluster(ctx, hubDynClient, hubClientset, claimName, clusterName); err != nil {
-			log.Printf("Error authenticating cluster %s (claim %s): %v", clusterName, claimName, err)
-			continue
-		}
+		go func(claimName, clusterName string) {
+			defer inFlight.Delete(claimName)
 
-		// Label claim as authenticated
-		if err := labelClaimAuthenticated(ctx, hubDynClient, claimName); err != nil {
-			log.Printf("Error labeling claim %s as authenticated: %v", claimName, err)
-			continue
-		}
+			if err := authenticateCluster(ctx, hubDynClient, hubClientset, claimName, clusterName); err != nil {
+				log.Printf("Error authenticating cluster %s (claim %s): %v", clusterName, claimName, err)
+				return
+			}
 
-		log.Printf("Successfully authenticated cluster %s (claim %s)", clusterName, claimName)
+			if err := labelClaimAuthenticated(ctx, hubDynClient, claimName); err != nil {
+				log.Printf("Error labeling claim %s as authenticated: %v", claimName, err)
+				return
+			}
+
+			log.Printf("Successfully authenticated cluster %s (claim %s)", clusterName, claimName)
+		}(claimName, clusterName)
 	}
 }
 
