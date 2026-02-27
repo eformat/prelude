@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -23,7 +24,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -48,9 +51,72 @@ var (
 		Resource: "clusteroperators",
 	}
 	clusterPoolNamespace = "cluster-pools"
+	keycloakRealmImportGVR = schema.GroupVersionResource{
+		Group:    "k8s.keycloak.org",
+		Version:  "v2alpha1",
+		Resource: "keycloakrealmimports",
+	}
 )
 
+const keycloakRealmTemplate = `apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: $CLUSTER_NAME
+spec:
+  keycloakCRName: keycloak
+  realm:
+    id: $CLUSTER_NAME
+    realm: $CLUSTER_NAME
+    enabled: true
+    sslRequired: external
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    duplicateEmailsAllowed: false
+    clients:
+      - clientId: ocp-idp
+        enabled: true
+        clientAuthenticatorType: client-secret
+        secret: $CLIENT_SECRET
+        publicClient: false
+        redirectUris:
+          - "*"
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: true
+        serviceAccountsEnabled: true
+        frontchannelLogout: false
+        protocol: openid-connect
+    roles:
+      realm:
+        - name: user
+          description: "Default user role"
+        - name: admin
+          description: "Administrator role"
+    users:
+      - username: admin
+        enabled: true
+        emailVerified: true
+        email: admin@demo.redhat.com
+        firstName: Admin
+        lastName: Demo
+        credentials:
+          - type: password
+            value: $ADMIN_PASSWORD
+            temporary: false
+        realmRoles:
+          - user
+    groups:
+      - name: admins
+      - name: users
+`
+
+var createHtpassSecret = true
+
 func main() {
+	if v := os.Getenv("CREATE_HTPASS_SECRET"); v == "false" {
+		createHtpassSecret = false
+		log.Printf("htpass-secret creation disabled (CREATE_HTPASS_SECRET=false)")
+	}
+
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
 	flag.Parse()
 
@@ -88,6 +154,14 @@ func main() {
 	}()
 
 	go checkSignerExpiry(ctx, hubDynClient, hubClientset, *clusterPool)
+
+	keycloakURL := os.Getenv("KEYCLOAK_URL")
+	if keycloakURL != "" {
+		log.Printf("SSO setup enabled (KEYCLOAK_URL=%s)", keycloakURL)
+		go setupSSO(ctx, hubDynClient, hubClientset, *clusterPool, keycloakURL)
+	} else {
+		log.Printf("SSO setup disabled (KEYCLOAK_URL not set)")
+	}
 
 	reconcile(ctx, hubDynClient, hubClientset, *clusterPool)
 	log.Printf("Cluster authenticator shutting down")
@@ -609,25 +683,29 @@ func createSpokeResources(ctx context.Context, spokeClientset kubernetes.Interfa
 	}
 
 	// Create secret htpass-secret in openshift-config (if not exists)
-	_, err = spokeClientset.CoreV1().Secrets("openshift-config").Get(ctx, "htpass-secret", metav1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "htpass-secret",
-				Namespace: "openshift-config",
-			},
-			Data: map[string][]byte{
-				"htpasswd": []byte(""),
-			},
+	if createHtpassSecret {
+		_, err = spokeClientset.CoreV1().Secrets("openshift-config").Get(ctx, "htpass-secret", metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "htpass-secret",
+					Namespace: "openshift-config",
+				},
+				Data: map[string][]byte{
+					"htpasswd": []byte(""),
+				},
+			}
+			if _, err := spokeClientset.CoreV1().Secrets("openshift-config").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+				return fmt.Errorf("creating htpass-secret: %w", err)
+			}
+			log.Printf("[%s] Created htpass-secret in openshift-config", clusterName)
+		} else if err != nil {
+			return fmt.Errorf("checking htpass-secret: %w", err)
+		} else {
+			log.Printf("[%s] htpass-secret already exists in openshift-config", clusterName)
 		}
-		if _, err := spokeClientset.CoreV1().Secrets("openshift-config").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("creating htpass-secret: %w", err)
-		}
-		log.Printf("[%s] Created htpass-secret in openshift-config", clusterName)
-	} else if err != nil {
-		return fmt.Errorf("checking htpass-secret: %w", err)
 	} else {
-		log.Printf("[%s] htpass-secret already exists in openshift-config", clusterName)
+		log.Printf("[%s] Skipping htpass-secret creation (disabled)", clusterName)
 	}
 
 	return nil
@@ -930,6 +1008,167 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-time.After(d):
 	}
+}
+
+// setupSSO periodically checks for claimed clusters that need SSO realm setup
+// and creates KeycloakRealmImport CRs on the hub cluster.
+func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, keycloakURL string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			log.Printf("Warning: SSO: error listing ClusterClaims: %v", err)
+		} else {
+			for _, claim := range claims.Items {
+				if ctx.Err() != nil {
+					return
+				}
+
+				if !claimMatchesPool(claim.Object, pool) {
+					continue
+				}
+
+				labels := claim.GetLabels()
+				if labels == nil || labels["prelude-auth"] != "done" {
+					continue
+				}
+
+				// Must be claimed (have a phone label)
+				if _, hasPhone := labels["prelude"]; !hasPhone {
+					continue
+				}
+
+				// Skip if SSO already done
+				if labels["prelude-sso"] == "done" {
+					continue
+				}
+
+				// Must have admin password annotation
+				annotations := claim.GetAnnotations()
+				if annotations == nil {
+					continue
+				}
+				adminPassword := annotations["prelude-admin-password"]
+				if adminPassword == "" {
+					continue
+				}
+
+				clusterName := getSpecNamespace(claim.Object)
+				if clusterName == "" {
+					continue
+				}
+
+				claimName := claim.GetName()
+				log.Printf("SSO: Setting up Keycloak realm for cluster %s (claim %s)", clusterName, claimName)
+
+				if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, adminPassword, keycloakURL); err != nil {
+					log.Printf("Warning: SSO: error creating Keycloak realm for %s: %v", clusterName, err)
+					continue
+				}
+
+				if err := labelClaimSSO(ctx, hubDynClient, claimName); err != nil {
+					log.Printf("Warning: SSO: error labeling claim %s: %v", claimName, err)
+					continue
+				}
+
+				log.Printf("SSO: Successfully set up Keycloak realm for cluster %s (claim %s)", clusterName, claimName)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// createKeycloakRealm creates or updates a KeycloakRealmImport CR on the hub cluster.
+func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, adminPassword, keycloakURL string) error {
+	// Generate random client secret
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return fmt.Errorf("generating client secret: %w", err)
+	}
+	clientSecret := hex.EncodeToString(secretBytes)
+
+	// Substitute template variables
+	rendered := keycloakRealmTemplate
+	rendered = strings.ReplaceAll(rendered, "$CLUSTER_NAME", clusterName)
+	rendered = strings.ReplaceAll(rendered, "$CLIENT_SECRET", clientSecret)
+	rendered = strings.ReplaceAll(rendered, "$ADMIN_PASSWORD", adminPassword)
+	rendered = strings.ReplaceAll(rendered, "$KEYCLOAK_URL", keycloakURL)
+
+	// Parse YAML into unstructured object
+	obj := &unstructured.Unstructured{}
+	decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(rendered), 4096)
+	if err := decoder.Decode(obj); err != nil {
+		return fmt.Errorf("parsing realm template: %w", err)
+	}
+
+	// Create or update in keycloak namespace
+	existing, err := hubDynClient.Resource(keycloakRealmImportGVR).Namespace("keycloak").Get(ctx, clusterName, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		obj.SetNamespace("keycloak")
+		_, err = hubDynClient.Resource(keycloakRealmImportGVR).Namespace("keycloak").Create(ctx, obj, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("creating KeycloakRealmImport: %w", err)
+		}
+		log.Printf("SSO: [%s] Created KeycloakRealmImport", clusterName)
+	} else if err != nil {
+		return fmt.Errorf("checking KeycloakRealmImport: %w", err)
+	} else {
+		obj.SetNamespace("keycloak")
+		obj.SetResourceVersion(existing.GetResourceVersion())
+		_, err = hubDynClient.Resource(keycloakRealmImportGVR).Namespace("keycloak").Update(ctx, obj, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("updating KeycloakRealmImport: %w", err)
+		}
+		log.Printf("SSO: [%s] Updated KeycloakRealmImport", clusterName)
+	}
+
+	// Wait for keycloak pod readiness
+	if err := waitForKeycloakPod(ctx, hubClientset); err != nil {
+		log.Printf("Warning: SSO: [%s] keycloak pod not ready: %v", clusterName, err)
+	}
+
+	return nil
+}
+
+// waitForKeycloakPod polls keycloak-0 pod in the keycloak namespace for Ready condition.
+func waitForKeycloakPod(ctx context.Context, hubClientset kubernetes.Interface) error {
+	for i := 0; i < 12; i++ {
+		pod, err := hubClientset.CoreV1().Pods("keycloak").Get(ctx, "keycloak-0", metav1.GetOptions{})
+		if err != nil {
+			sleepOrDone(ctx, 5*time.Second)
+			continue
+		}
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				return nil
+			}
+		}
+		sleepOrDone(ctx, 5*time.Second)
+	}
+	return fmt.Errorf("keycloak-0 pod not ready after 60s")
+}
+
+// labelClaimSSO sets the prelude-sso=done label on a ClusterClaim.
+func labelClaimSSO(ctx context.Context, hubDynClient dynamic.Interface, claimName string) error {
+	claim, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Get(ctx, claimName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("getting claim: %w", err)
+	}
+	labels := claim.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels["prelude-sso"] = "done"
+	claim.SetLabels(labels)
+	_, err = hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
+	return err
 }
 
 // buildConfig returns a Kubernetes REST config. It uses the KUBECONFIG env var

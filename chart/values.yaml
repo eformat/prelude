@@ -10,6 +10,7 @@ server:
   recaptchaSiteKey: ""
   recaptchaSecretKey: ""
   adminPassword: ""
+  hideKubeconfig: true
   maasUrl: ""
   maasToken: ""
 
@@ -26,6 +27,8 @@ clusterAuthenticator:
   image:
     repository: quay.io/eformat/prelude-cluster-authenticator
     tag: latest
+  keycloakUrl: ""
+  createHtpassSecret: false
 
 client:
   image:

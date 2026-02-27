@@ -359,6 +359,34 @@ The authentication flow:
 7. The Go `GET /api/admin` endpoint validates the `Authorization: Bearer <token>` header for defense-in-depth
 8. Tokens are stored in-memory on the Go server -- sessions are invalidated on server restart
 
+### SSO Authentication
+
+Keycloak SSO is provisioned on the HUB Cluster. When a user claims a cluster, the cluster-authenticator performs the following actions.
+
+On the HUB cluster we create a KeycloakRealmImport using the yaml template and the equivalent cli command.
+
+Set env vars.
+
+```bash
+CLUSTER_NAME=prelude-q8jzk
+CLIENT_SECRET="secret"
+CLIENT_ID="ocp-idp"
+ADMIN_PASSWORD="password the user entered on claiming the cluster"
+KEYCLOAK_URL="keycloak-keycloak.apps.hub-cluster.com"
+```
+
+Create Realm.
+
+```bash
+cat cluster-authenticator/keycload-realm-import.yaml | envsubst | oc apply -n keycloak -f-
+```
+
+Wait for keycloak pod in HUB cluster.
+
+```bash
+oc -n keycloak wait --for=condition=Ready=True pods -l statefulset.kubernetes.io/pod-name=keycloak-0 --timeout=5s
+```
+
 ### Browser Fingerprint Limiting
 
 To prevent users from claiming multiple clusters with different phone numbers, a browser fingerprint is generated client-side and sent with the claim request. The fingerprint is a SHA-256 hash (first 16 hex characters) of stable browser properties: canvas rendering, screen dimensions, color depth, language, hardware concurrency, platform, and timezone.

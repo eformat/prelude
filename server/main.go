@@ -57,6 +57,7 @@ var (
 
 var recaptchaSecretKey string
 var recaptchaSiteKey string
+var hideKubeconfig bool
 
 var adminPassword string
 var maasURL string
@@ -250,6 +251,10 @@ func main() {
 	}
 	recaptchaSecretKey = os.Getenv("RECAPTCHA_SECRET_KEY")
 	recaptchaSiteKey = os.Getenv("RECAPTCHA_SITE_KEY")
+	hideKubeconfig = os.Getenv("HIDE_KUBECONFIG") == "true"
+	if hideKubeconfig {
+		log.Printf("Kubeconfig display hidden from client")
+	}
 	if recaptchaSecretKey != "" {
 		log.Printf("reCAPTCHA verification enabled")
 	} else {
@@ -342,8 +347,9 @@ func main() {
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"recaptchaSiteKey": recaptchaSiteKey,
+		"hideKubeconfig":   hideKubeconfig,
 	})
 }
 
@@ -800,6 +806,14 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 			}
 			claim.SetLabels(labels)
 
+			// Store admin password as annotation for cluster-authenticator SSO setup
+			annotations := claim.GetAnnotations()
+			if annotations == nil {
+				annotations = make(map[string]string)
+			}
+			annotations["prelude-admin-password"] = password
+			claim.SetAnnotations(annotations)
+
 			// Set spec.lifetime = age + configured lifetime
 			configuredDuration, err := parseDuration(clusterLifetime)
 			if err != nil {
@@ -1101,13 +1115,17 @@ func unlabelClaim(ctx context.Context, dynClient dynamic.Interface, claimName st
 	delete(labels, "prelude")
 	delete(labels, "prelude-auth")
 	delete(labels, "prelude-fp")
+	delete(labels, "prelude-sso")
 	claim.SetLabels(labels)
+	annotations := claim.GetAnnotations()
+	delete(annotations, "prelude-admin-password")
+	claim.SetAnnotations(annotations)
 	_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
 	if err != nil {
 		log.Printf("Error unlabeling claim %s: %v", claimName, err)
 		return
 	}
-	log.Printf("Unlabeled claim %s (removed prelude, prelude-auth, prelude-fp)", claimName)
+	log.Printf("Unlabeled claim %s (removed prelude, prelude-auth, prelude-fp, prelude-sso)", claimName)
 }
 
 // extractKubeconfig reads kubeconfig data from a Secret, handling common key names

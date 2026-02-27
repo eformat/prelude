@@ -58,6 +58,10 @@ spec:
             - name: ADMIN_PASSWORD
               value: "{{ .Values.server.adminPassword }}"
             {{- end }}
+            {{- if .Values.server.hideKubeconfig }}
+            - name: HIDE_KUBECONFIG
+              value: "true"
+            {{- end }}
             {{- if .Values.server.maasUrl }}
             - name: MAAS_URL
               value: "{{ .Values.server.maasUrl }}"
@@ -106,6 +110,14 @@ spec:
             {{- end }}
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
+            {{- if .Values.clusterAuthenticator.keycloakUrl }}
+            - name: KEYCLOAK_URL
+              value: "{{ .Values.clusterAuthenticator.keycloakUrl }}"
+            {{- end }}
+            {{- if not .Values.clusterAuthenticator.createHtpassSecret }}
+            - name: CREATE_HTPASS_SECRET
+              value: "false"
+            {{- end }}
           {{- if .Values.server.kubeconfigSecret }}
           volumeMounts:
             - name: kubeconfig

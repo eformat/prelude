@@ -251,6 +251,7 @@ export default function Home() {
   const countrySearchRef = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [hideKubeconfig, setHideKubeconfig] = useState(false);
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [preparingDeadline, setPreparingDeadline] = useState(0);
@@ -262,6 +263,18 @@ export default function Home() {
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const { executeRecaptcha } = useGoogleReCaptcha();
+
+  // Fetch runtime config from server
+  useEffect(() => {
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.hideKubeconfig) {
+          setHideKubeconfig(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Close country dropdown on outside click
   useEffect(() => {
@@ -860,6 +873,7 @@ export default function Home() {
               </div>
 
               {/* Kubeconfig Card */}
+              {!hideKubeconfig && (
               <div
                 className="bg-white border border-rh-gray-20 lg:row-span-1 animate-fade-in-up"
                 style={{ animationDelay: '0.25s' }}
@@ -894,6 +908,7 @@ export default function Home() {
                   </pre>
                 </div>
               </div>
+              )}
             </div>
           </div>
         </section>
