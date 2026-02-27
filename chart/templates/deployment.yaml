@@ -118,6 +118,10 @@ spec:
             - name: KEYCLOAK_URL
               value: "{{ .Values.clusterAuthenticator.keycloakUrl }}"
             {{- end }}
+            {{- if .Values.clusterAuthenticator.keycloakClientSecret }}
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: "{{ .Values.clusterAuthenticator.keycloakClientSecret }}"
+            {{- end }}
             {{- if not .Values.clusterAuthenticator.createHtpassSecret }}
             - name: CREATE_HTPASS_SECRET
               value: "false"

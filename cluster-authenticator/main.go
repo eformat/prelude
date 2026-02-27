@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -156,9 +155,13 @@ func main() {
 	go checkSignerExpiry(ctx, hubDynClient, hubClientset, *clusterPool)
 
 	keycloakURL := os.Getenv("KEYCLOAK_URL")
+	keycloakClientSecret := os.Getenv("KEYCLOAK_CLIENT_SECRET")
 	if keycloakURL != "" {
+		if keycloakClientSecret == "" {
+			log.Fatalf("KEYCLOAK_CLIENT_SECRET is required when KEYCLOAK_URL is set")
+		}
 		log.Printf("SSO setup enabled (KEYCLOAK_URL=%s)", keycloakURL)
-		go setupSSO(ctx, hubDynClient, hubClientset, *clusterPool, keycloakURL)
+		go setupSSO(ctx, hubDynClient, hubClientset, *clusterPool, keycloakURL, keycloakClientSecret)
 	} else {
 		log.Printf("SSO setup disabled (KEYCLOAK_URL not set)")
 	}
@@ -1012,7 +1015,7 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 
 // setupSSO periodically checks for claimed clusters that need SSO realm setup
 // and creates KeycloakRealmImport CRs on the hub cluster.
-func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, keycloakURL string) {
+func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, keycloakURL, clientSecret string) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1063,7 +1066,7 @@ func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset 
 				claimName := claim.GetName()
 				log.Printf("SSO: Setting up Keycloak realm for cluster %s (claim %s)", clusterName, claimName)
 
-				if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, adminPassword, keycloakURL); err != nil {
+				if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, adminPassword, keycloakURL, clientSecret); err != nil {
 					log.Printf("Warning: SSO: error creating Keycloak realm for %s: %v", clusterName, err)
 					continue
 				}
@@ -1086,14 +1089,7 @@ func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset 
 }
 
 // createKeycloakRealm creates or updates a KeycloakRealmImport CR on the hub cluster.
-func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, adminPassword, keycloakURL string) error {
-	// Generate random client secret
-	secretBytes := make([]byte, 32)
-	if _, err := rand.Read(secretBytes); err != nil {
-		return fmt.Errorf("generating client secret: %w", err)
-	}
-	clientSecret := hex.EncodeToString(secretBytes)
-
+func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, adminPassword, keycloakURL, clientSecret string) error {
 	// Substitute template variables
 	rendered := keycloakRealmTemplate
 	rendered = strings.ReplaceAll(rendered, "$CLUSTER_NAME", clusterName)
