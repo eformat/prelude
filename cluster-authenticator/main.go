@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
@@ -100,16 +102,31 @@ spec:
         lastName: Demo
         credentials:
           - type: password
-            value: $ADMIN_PASSWORD
+            value: $CHANGEME
             temporary: false
         realmRoles:
           - user
+      - username: service-account-ocp-idp
+        enabled: true
+        serviceAccountClientId: ocp-idp
+        clientRoles:
+          realm-management:
+            - manage-users
+            - view-users
     groups:
       - name: admins
       - name: users
 `
 
+var consoleGVR = schema.GroupVersionResource{
+	Group:    "config.openshift.io",
+	Version:  "v1",
+	Resource: "consoles",
+}
+
 var createHtpassSecret = true
+var keycloakURL string
+var keycloakClientSecret string
 
 func main() {
 	if v := os.Getenv("CREATE_HTPASS_SECRET"); v == "false" {
@@ -155,14 +172,13 @@ func main() {
 
 	go checkSignerExpiry(ctx, hubDynClient, hubClientset, *clusterPool)
 
-	keycloakURL := os.Getenv("KEYCLOAK_URL")
-	keycloakClientSecret := os.Getenv("KEYCLOAK_CLIENT_SECRET")
+	keycloakURL = os.Getenv("KEYCLOAK_URL")
+	keycloakClientSecret = os.Getenv("KEYCLOAK_CLIENT_SECRET")
 	if keycloakURL != "" {
 		if keycloakClientSecret == "" {
 			log.Fatalf("KEYCLOAK_CLIENT_SECRET is required when KEYCLOAK_URL is set")
 		}
 		log.Printf("SSO setup enabled (KEYCLOAK_URL=%s)", keycloakURL)
-		go setupSSO(ctx, hubDynClient, hubClientset, *clusterPool, keycloakURL, keycloakClientSecret)
 	} else {
 		log.Printf("SSO setup disabled (KEYCLOAK_URL not set)")
 	}
@@ -316,7 +332,16 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 		return fmt.Errorf("creating spoke typed client: %w", err)
 	}
 
-	// Step 2: Wait for stable cluster
+	// Step 2: Create KeycloakRealmImport on hub (if SSO enabled)
+	// Done before stability check so the authentication operator can find the realm
+	if keycloakURL != "" {
+		log.Printf("[%s] Creating KeycloakRealmImport", clusterName)
+		if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, keycloakURL, keycloakClientSecret); err != nil {
+			log.Printf("Warning: [%s] SSO realm creation failed: %v", clusterName, err)
+		}
+	}
+
+	// Step 3: Wait for stable cluster
 	log.Printf("[%s] Waiting for cluster to stabilize", clusterName)
 	if err := waitForStableCluster(ctx, spokeDynClient, clusterName); err != nil {
 		return fmt.Errorf("waiting for stable cluster: %w", err)
@@ -366,6 +391,17 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 		return fmt.Errorf("creating spoke resources: %w", err)
 	}
 
+	// Step 9: Patch spoke console for SSO logout redirect (if SSO enabled)
+	if keycloakURL != "" {
+		log.Printf("[%s] Patching spoke console for SSO logout", clusterName)
+		newSpokeDynClient, err := dynamic.NewForConfig(newSpokeConfig)
+		if err != nil {
+			log.Printf("Warning: [%s] creating spoke dynamic client: %v", clusterName, err)
+		} else if err := patchSpokeConsoleLogout(ctx, newSpokeDynClient, clusterName, keycloakURL); err != nil {
+			log.Printf("Warning: [%s] console logout patch failed: %v", clusterName, err)
+		}
+	}
+
 	return nil
 }
 
@@ -389,7 +425,7 @@ func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface,
 			return fmt.Errorf("timed out waiting for cluster %s to stabilize after %v", clusterName, timeout)
 		}
 
-		stable, err := areClusterOperatorsStable(ctx, spokeDynClient)
+		stable, err := areClusterOperatorsStable(ctx, spokeDynClient, clusterName)
 		if err != nil {
 			log.Printf("[%s] Error checking ClusterOperators: %v", clusterName, err)
 			stableSince = nil
@@ -429,24 +465,31 @@ func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface,
 
 // areClusterOperatorsStable checks if all ClusterOperators have
 // Available=True, Progressing=False, Degraded=False.
-func areClusterOperatorsStable(ctx context.Context, spokeDynClient dynamic.Interface) (bool, error) {
+func areClusterOperatorsStable(ctx context.Context, spokeDynClient dynamic.Interface, clusterName string) (bool, error) {
 	list, err := spokeDynClient.Resource(clusterOperatorGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return false, fmt.Errorf("listing ClusterOperators: %w", err)
 	}
 
 	if len(list.Items) == 0 {
+		log.Printf("[%s] No ClusterOperators found", clusterName)
 		return false, nil
 	}
 
+	allStable := true
 	for _, co := range list.Items {
+		name := co.GetName()
 		status, ok := co.Object["status"].(map[string]interface{})
 		if !ok {
-			return false, nil
+			log.Printf("[%s] ClusterOperator %s has no status", clusterName, name)
+			allStable = false
+			continue
 		}
 		conditions, ok := status["conditions"].([]interface{})
 		if !ok {
-			return false, nil
+			log.Printf("[%s] ClusterOperator %s has no conditions", clusterName, name)
+			allStable = false
+			continue
 		}
 
 		condMap := make(map[string]string)
@@ -461,11 +504,17 @@ func areClusterOperatorsStable(ctx context.Context, spokeDynClient dynamic.Inter
 		}
 
 		if condMap["Available"] != "True" || condMap["Progressing"] != "False" || condMap["Degraded"] != "False" {
-			return false, nil
+			log.Printf("[%s] ClusterOperator %s not stable: Available=%s Progressing=%s Degraded=%s",
+				clusterName, name, condMap["Available"], condMap["Progressing"], condMap["Degraded"])
+			allStable = false
 		}
 	}
 
-	return true, nil
+	if allStable {
+		log.Printf("[%s] All %d ClusterOperators stable", clusterName, len(list.Items))
+	}
+
+	return allStable, nil
 }
 
 // regenerateKubeconfig generates a new kubeconfig for the given CN via the
@@ -1026,89 +1075,20 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 	}
 }
 
-// setupSSO periodically checks for claimed clusters that need SSO realm setup
-// and creates KeycloakRealmImport CRs on the hub cluster.
-func setupSSO(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool, keycloakURL, clientSecret string) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			log.Printf("Warning: SSO: error listing ClusterClaims: %v", err)
-		} else {
-			for _, claim := range claims.Items {
-				if ctx.Err() != nil {
-					return
-				}
-
-				if !claimMatchesPool(claim.Object, pool) {
-					continue
-				}
-
-				labels := claim.GetLabels()
-				if labels == nil || labels["prelude-auth"] != "done" {
-					continue
-				}
-
-				// Must be claimed (have a phone label)
-				if _, hasPhone := labels["prelude"]; !hasPhone {
-					continue
-				}
-
-				// Skip if SSO already done
-				if labels["prelude-sso"] == "done" {
-					continue
-				}
-
-				// Must have admin password annotation
-				annotations := claim.GetAnnotations()
-				if annotations == nil {
-					continue
-				}
-				adminPassword := annotations["prelude-admin-password"]
-				if adminPassword == "" {
-					continue
-				}
-
-				clusterName := getSpecNamespace(claim.Object)
-				if clusterName == "" {
-					continue
-				}
-
-				claimName := claim.GetName()
-				log.Printf("SSO: Setting up Keycloak realm for cluster %s (claim %s)", clusterName, claimName)
-
-				if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, adminPassword, keycloakURL, clientSecret); err != nil {
-					log.Printf("Warning: SSO: error creating Keycloak realm for %s: %v", clusterName, err)
-					continue
-				}
-
-				if err := labelClaimSSO(ctx, hubDynClient, claimName); err != nil {
-					log.Printf("Warning: SSO: error labeling claim %s: %v", claimName, err)
-					continue
-				}
-
-				log.Printf("SSO: Successfully set up Keycloak realm for cluster %s (claim %s)", clusterName, claimName)
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 // createKeycloakRealm creates or updates a KeycloakRealmImport CR on the hub cluster.
-func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, adminPassword, keycloakURL, clientSecret string) error {
+func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, keycloakURL, clientSecret string) error {
+	// Generate random initial password (overwritten by server at claim time)
+	pwBytes := make([]byte, 16)
+	if _, err := rand.Read(pwBytes); err != nil {
+		return fmt.Errorf("generating initial password: %w", err)
+	}
+	initialPassword := hex.EncodeToString(pwBytes)
+
 	// Substitute template variables
 	rendered := keycloakRealmTemplate
 	rendered = strings.ReplaceAll(rendered, "$CLUSTER_NAME", clusterName)
 	rendered = strings.ReplaceAll(rendered, "$CLIENT_SECRET", clientSecret)
-	rendered = strings.ReplaceAll(rendered, "$ADMIN_PASSWORD", adminPassword)
-	rendered = strings.ReplaceAll(rendered, "$KEYCLOAK_URL", keycloakURL)
+	rendered = strings.ReplaceAll(rendered, "$CHANGEME", initialPassword)
 
 	// Parse YAML into unstructured object
 	obj := &unstructured.Unstructured{}
@@ -1164,20 +1144,16 @@ func waitForKeycloakPod(ctx context.Context, hubClientset kubernetes.Interface) 
 	return fmt.Errorf("keycloak-0 pod not ready after 60s")
 }
 
-// labelClaimSSO sets the prelude-sso=done label on a ClusterClaim.
-func labelClaimSSO(ctx context.Context, hubDynClient dynamic.Interface, claimName string) error {
-	claim, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Get(ctx, claimName, metav1.GetOptions{})
+// patchSpokeConsoleLogout patches the spoke cluster's console to redirect logout to Keycloak.
+func patchSpokeConsoleLogout(ctx context.Context, spokeDynClient dynamic.Interface, clusterName, kcURL string) error {
+	logoutURL := fmt.Sprintf("https://%s/realms/%s/protocol/openid-connect/logout?client_id=ocp-idp", kcURL, clusterName)
+	patch := fmt.Sprintf(`{"spec":{"authentication":{"logoutRedirect":"%s"}}}`, logoutURL)
+	_, err := spokeDynClient.Resource(consoleGVR).Patch(ctx, "cluster", types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
-		return fmt.Errorf("getting claim: %w", err)
+		return fmt.Errorf("patching console: %w", err)
 	}
-	labels := claim.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-	labels["prelude-sso"] = "done"
-	claim.SetLabels(labels)
-	_, err = hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
-	return err
+	log.Printf("[%s] Patched console logout redirect to %s", clusterName, logoutURL)
+	return nil
 }
 
 // buildConfig returns a Kubernetes REST config. It uses the KUBECONFIG env var

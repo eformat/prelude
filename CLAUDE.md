@@ -361,7 +361,7 @@ The authentication flow:
 
 ### SSO Authentication
 
-Keycloak SSO is provisioned on the HUB Cluster. When a user claims a cluster, the cluster-authenticator performs the following actions.
+Keycloak SSO is provisioned on the HUB Cluster. The cluster-authenticator performs the following actions.
 
 On the HUB cluster we create a KeycloakRealmImport using the yaml template and the equivalent cli command.
 
@@ -371,7 +371,6 @@ Set env vars.
 CLUSTER_NAME=prelude-q8jzk
 CLIENT_SECRET="secret"
 CLIENT_ID="ocp-idp"
-ADMIN_PASSWORD="password the user entered on claiming the cluster"
 KEYCLOAK_URL="keycloak-keycloak.apps.hub-cluster.com"
 ```
 
@@ -385,6 +384,36 @@ Wait for keycloak pod in HUB cluster.
 
 ```bash
 oc -n keycloak wait --for=condition=Ready=True pods -l statefulset.kubernetes.io/pod-name=keycloak-0 --timeout=5s
+```
+
+When a user claims a cluster, their password is set in Keycloak as follows.
+
+Get a token on the master realm. Use credentials on the HUB cluster.
+
+```bash
+export USERNAME=$(oc get secret keycloak-initial-admin -n keycloak -o template='{{index .data "username"}}' | base64 -d)
+export PASSWORD=$(oc get secret keycloak-initial-admin -n keycloak -o template='{{index .data "password"}}' | base64 -d)
+TOKEN=$(curl -s -d "client_id=admin-cli" \
+     -d "username=$USER" \
+     -d "password=$PASSWORD" \
+     -d "grant_type=password" \
+     "https://$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" | jq -r .access_token)
+```
+
+Lookup the admin user id on the realm.
+
+```bash
+export REALM=prelude-lvtjv-9v4x4
+USER_ID=$(curl -sX GET "https://$KEYCLOAK_URL/admin/realms/$REALM/users?username=admin" -H "Authorization: Bearer $TOKEN" | jq -r .[].id)
+```
+
+```bash
+export NEW_PASSWORD=<password user supplied to claim cluster>
+# success is HTTP/1.1 204 No Content
+curl -vX PUT "https://$KEYCLOAK_URL/admin/realms/$REALM/users/$USER_ID/reset-password" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer $TOKEN" \
+     -d "{\"temporary\": false,\"type\": \"password\",\"value\": \"$NEW_PASSWORD\"}"
 ```
 
 ### Browser Fingerprint Limiting

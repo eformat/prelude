@@ -63,6 +63,8 @@ var createHtpassSecret = true
 var adminPassword string
 var maasURL string
 var maasToken string
+var keycloakURL string
+var keycloakClientSecret string
 var adminTokens = struct {
 	sync.RWMutex
 	m map[string]bool
@@ -279,6 +281,14 @@ func main() {
 		log.Printf("MaaS credentials update enabled (url: %s)", maasURL)
 	} else {
 		log.Printf("MaaS credentials update disabled (MAAS_URL or MAAS_TOKEN not set)")
+	}
+
+	keycloakURL = os.Getenv("KEYCLOAK_URL")
+	keycloakClientSecret = os.Getenv("KEYCLOAK_CLIENT_SECRET")
+	if keycloakURL != "" && keycloakClientSecret != "" {
+		log.Printf("Keycloak password update enabled (url: %s)", keycloakURL)
+	} else {
+		log.Printf("Keycloak password update disabled (KEYCLOAK_URL or KEYCLOAK_CLIENT_SECRET not set)")
 	}
 
 	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
@@ -812,14 +822,6 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 			}
 			claim.SetLabels(labels)
 
-			// Store admin password as annotation for cluster-authenticator SSO setup
-			annotations := claim.GetAnnotations()
-			if annotations == nil {
-				annotations = make(map[string]string)
-			}
-			annotations["prelude-admin-password"] = password
-			claim.SetAnnotations(annotations)
-
 			// Set spec.lifetime = age + configured lifetime
 			configuredDuration, err := parseDuration(clusterLifetime)
 			if err != nil {
@@ -930,6 +932,13 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	if maasURL != "" && maasToken != "" {
 		if err := updateMaaSCredentials(adminKubeconfigData, maasURL, maasToken, clusterName, clusterLifetime); err != nil {
 			log.Printf("Warning: failed to update MaaS credentials on %s: %v", clusterName, err)
+		}
+	}
+
+	// Update Keycloak admin password if configured
+	if keycloakURL != "" && keycloakClientSecret != "" {
+		if err := updateKeycloakPassword(keycloakURL, clusterName, keycloakClientSecret, password); err != nil {
+			log.Printf("Warning: failed to update Keycloak password for %s: %v", clusterName, err)
 		}
 	}
 
@@ -1128,11 +1137,7 @@ func unlabelClaim(ctx context.Context, dynClient dynamic.Interface, claimName st
 	delete(labels, "prelude")
 	delete(labels, "prelude-auth")
 	delete(labels, "prelude-fp")
-	delete(labels, "prelude-sso")
 	claim.SetLabels(labels)
-	annotations := claim.GetAnnotations()
-	delete(annotations, "prelude-admin-password")
-	claim.SetAnnotations(annotations)
 	_, err = dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).Update(ctx, claim, metav1.UpdateOptions{})
 	if err != nil {
 		log.Printf("Error unlabeling claim %s: %v", claimName, err)
@@ -1415,6 +1420,93 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 	}
 
 	log.Printf("[%s] MaaS credentials updated successfully", clusterName)
+	return nil
+}
+
+// updateKeycloakPassword updates the admin user's password in the Keycloak realm
+// via the Admin REST API using the ocp-idp service account.
+func updateKeycloakPassword(kcURL, realmName, clientSecret, newPassword string) error {
+	kcHost := strings.TrimRight(kcURL, "/")
+	httpClient := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	// Step 1: Get service account token via client credentials
+	tokenURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", kcHost, realmName)
+	tokenResp, err := httpClient.PostForm(tokenURL, url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {"ocp-idp"},
+		"client_secret": {clientSecret},
+	})
+	if err != nil {
+		return fmt.Errorf("requesting token: %w", err)
+	}
+	defer tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tokenResp.Body)
+		return fmt.Errorf("token request failed (status %d): %s", tokenResp.StatusCode, string(body))
+	}
+
+	var tokenData struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err != nil {
+		return fmt.Errorf("decoding token response: %w", err)
+	}
+
+	// Step 2: Find admin user in realm
+	usersURL := fmt.Sprintf("%s/admin/realms/%s/users?username=admin&exact=true", kcHost, realmName)
+	usersReq, _ := http.NewRequest("GET", usersURL, nil)
+	usersReq.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
+
+	usersResp, err := httpClient.Do(usersReq)
+	if err != nil {
+		return fmt.Errorf("listing users: %w", err)
+	}
+	defer usersResp.Body.Close()
+
+	if usersResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(usersResp.Body)
+		return fmt.Errorf("users request failed (status %d): %s", usersResp.StatusCode, string(body))
+	}
+
+	var users []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(usersResp.Body).Decode(&users); err != nil {
+		return fmt.Errorf("decoding users response: %w", err)
+	}
+	if len(users) == 0 {
+		return fmt.Errorf("admin user not found in realm %s", realmName)
+	}
+
+	// Step 3: Reset password
+	resetURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/reset-password", kcHost, realmName, users[0].ID)
+	resetBody, _ := json.Marshal(map[string]interface{}{
+		"type":      "password",
+		"value":     newPassword,
+		"temporary": false,
+	})
+	resetReq, _ := http.NewRequest("PUT", resetURL, strings.NewReader(string(resetBody)))
+	resetReq.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
+	resetReq.Header.Set("Content-Type", "application/json")
+
+	resetResp, err := httpClient.Do(resetReq)
+	if err != nil {
+		return fmt.Errorf("resetting password: %w", err)
+	}
+	defer resetResp.Body.Close()
+
+	if resetResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resetResp.Body)
+		return fmt.Errorf("password reset failed (status %d): %s", resetResp.StatusCode, string(body))
+	}
+
+	log.Printf("[%s] Keycloak admin password updated", realmName)
 	return nil
 }
 
