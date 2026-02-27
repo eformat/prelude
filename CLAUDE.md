@@ -392,6 +392,8 @@ export REALM=prelude-lvtjv-9v4x4
 USER_ID=$(curl -sX GET "https://$KEYCLOAK_URL/admin/realms/$REALM/users?username=admin" -H "Authorization: Bearer $TOKEN" | jq -r .[].id)
 ```
 
+Change the user password.
+
 ```bash
 export NEW_PASSWORD=<password user supplied to claim cluster>
 # success is HTTP/1.1 204 No Content
