@@ -1031,7 +1031,11 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 
 	var models struct {
 		Data []struct {
-			URL string `json:"url"`
+			ID           string `json:"id"`
+			URL          string `json:"url"`
+			ModelDetails struct {
+				DisplayName string `json:"displayName"`
+			} `json:"modelDetails"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(modelsResp.Body).Decode(&models); err != nil {
@@ -1122,6 +1126,82 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 		log.Printf("[%s] Updated chat-openwebui secret in chat namespace", clusterName)
 	}
 
+	// Update multimodal-chatbot secret config.json
+	chatbotSecret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "multimodal-chatbot", metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		log.Printf("[%s] multimodal-chatbot secret not found, skipping", clusterName)
+	} else if err != nil {
+		log.Printf("[%s] Warning: failed to get multimodal-chatbot secret: %v", clusterName, err)
+	} else {
+		configJSON := chatbotSecret.Data["config.json"]
+		var config map[string]interface{}
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			log.Printf("[%s] Warning: failed to parse multimodal-chatbot config.json: %v", clusterName, err)
+		} else {
+			llms, _ := config["llms"].([]interface{})
+			if llms == nil {
+				llms = []interface{}{}
+			}
+
+			// Build a map of model_name -> index for existing entries
+			nameIndex := make(map[string]int)
+			for i, entry := range llms {
+				if m, ok := entry.(map[string]interface{}); ok {
+					if name, ok := m["model_name"].(string); ok {
+						nameIndex[name] = i
+					}
+				}
+			}
+			log.Printf("[%s] multimodal-chatbot config has %d llm entries, model_names: %v", clusterName, len(llms), func() []string {
+				names := make([]string, 0, len(nameIndex))
+				for k := range nameIndex {
+					names = append(names, k)
+				}
+				return names
+			}())
+
+			// Update or add entries for each MaaS model
+			updated := 0
+			for _, m := range models.Data {
+				modelURL := m.URL + "/v1"
+				// Extract model_name from the last path segment of the URL
+				// e.g. http://maas.example.com/maas-demo/granite-vision-32-2b -> granite-vision-32-2b
+				modelName := ""
+				trimmed := strings.TrimRight(m.URL, "/")
+				if lastSlash := strings.LastIndex(trimmed, "/"); lastSlash >= 0 {
+					modelName = trimmed[lastSlash+1:]
+				}
+				log.Printf("[%s] MaaS model: id=%q displayName=%q url=%q model_name=%q", clusterName, m.ID, m.ModelDetails.DisplayName, m.URL, modelName)
+
+				if idx, exists := nameIndex[modelName]; exists {
+					// Update existing entry, preserving other fields
+					if entry, ok := llms[idx].(map[string]interface{}); ok {
+						entry["api_key"] = tokenResp.Token
+						entry["inference_endpoint"] = modelURL
+						updated++
+						log.Printf("[%s] Matched model %q to config entry %d", clusterName, modelName, idx)
+					}
+				} else {
+					log.Printf("[%s] Skipping model %q (no matching entry in config)", clusterName, modelName)
+				}
+			}
+			log.Printf("[%s] multimodal-chatbot: %d models updated/added", clusterName, updated)
+
+			config["llms"] = llms
+			updatedJSON, err := json.Marshal(config)
+			if err != nil {
+				log.Printf("[%s] Warning: failed to marshal multimodal-chatbot config.json: %v", clusterName, err)
+			} else {
+				chatbotSecret.Data["config.json"] = updatedJSON
+				if _, err := spokeClient.CoreV1().Secrets("chat").Update(ctx, chatbotSecret, metav1.UpdateOptions{}); err != nil {
+					log.Printf("[%s] Warning: failed to update multimodal-chatbot secret: %v", clusterName, err)
+				} else {
+					log.Printf("[%s] Updated multimodal-chatbot secret in chat namespace", clusterName)
+				}
+			}
+		}
+	}
+
 	// Restart chat pods
 	pods, err := spokeClient.CoreV1().Pods("chat").List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=openwebui",
@@ -1134,6 +1214,22 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 			log.Printf("[%s] Warning: failed to delete chat pod %s: %v", clusterName, pod.Name, err)
 		} else {
 			log.Printf("[%s] Deleted chat pod %s for restart", clusterName, pod.Name)
+		}
+	}
+
+	// Restart multimodal-chatbot pods
+	chatbotPods, err := spokeClient.CoreV1().Pods("chat").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=multimodal-chatbot",
+	})
+	if err != nil {
+		log.Printf("[%s] Warning: failed to list multimodal-chatbot pods: %v", clusterName, err)
+	} else {
+		for _, pod := range chatbotPods.Items {
+			if err := spokeClient.CoreV1().Pods("chat").Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+				log.Printf("[%s] Warning: failed to delete multimodal-chatbot pod %s: %v", clusterName, pod.Name, err)
+			} else {
+				log.Printf("[%s] Deleted multimodal-chatbot pod %s for restart", clusterName, pod.Name)
+			}
 		}
 	}
 

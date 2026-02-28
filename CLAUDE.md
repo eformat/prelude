@@ -150,10 +150,40 @@ The server performs the following steps when MaaS is configured:
    type: Opaque
    ```
 
+   Update the existing config.json with models found in MaaS. Use the "model_name" as identifier. If already found, update the api_key with the token and inference_endpoint. Leave the other parameters as they are in the config map.
+
+   ```bash
+   # Secret
+   oc -n chat get secret multimodal-chatbot
+   apiVersion: v1
+   stringData:
+     config.json:
+       {
+         "llms": [
+           {
+             "model_name": "model1",
+             "inference_endpoint": "maas.example.com/model1/v1",
+             "api_key": "token1",
+           },
+           {
+             "model_name": "model2",
+             "inference_endpoint": "maas.example.com/model2/v1",
+             "api_key": "token1",
+           },           
+         ]
+       }         
+   kind: Secret
+   metadata:
+     name: multimodal-chatbot
+     namespace: chat
+   type: Opaque
+   ```
+
 4. **Restart chat pods**:
 
    ```bash
    oc -n chat delete pod -l app.kubernetes.io/name=openwebui
+   oc -n chat delete pod -l app=multimodal-chatbot
    ```
 
 MaaS credential update failures are logged as warnings but do not prevent the user from receiving their cluster.
@@ -224,6 +254,13 @@ It watches ClusterClaims for the pool and processes each bound claim (one with `
 
    ```bash
    oc adm wait-for-stable-cluster --minimum-stable-period=120s --timeout=30m
+   ```
+
+   We also check that the ingress and api certificates are available.
+
+   ```bash
+   oc -n openshift-ingress wait --for=condition=Ready=True certificates apps-cert --minimum-stable-period=120s --timeout=30m
+   oc -n openshift-config wait --for=condition=Ready=True certificates api-cert --minimum-stable-period=120s --timeout=30m
    ```
 
 3. **Regenerate system:admin kubeconfig** — generates an RSA 4096 key pair, submits a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client` signer) on the spoke cluster with `CN=system:admin`, approves it, extracts the signed certificate, retrieves the CA cert from the spoke API server TLS connection, and builds a kubeconfig YAML with embedded certs.
