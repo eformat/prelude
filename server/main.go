@@ -1126,7 +1126,7 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 		log.Printf("[%s] Updated chat-openwebui secret in chat namespace", clusterName)
 	}
 
-	// Update multimodal-chatbot secret config.json
+	// Update multimodal-chatbot secret config.json — llms array is managed entirely in Go
 	chatbotSecret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "multimodal-chatbot", metav1.GetOptions{})
 	if k8serrors.IsNotFound(err) {
 		log.Printf("[%s] multimodal-chatbot secret not found, skipping", clusterName)
@@ -1138,57 +1138,51 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 		if err := json.Unmarshal(configJSON, &config); err != nil {
 			log.Printf("[%s] Warning: failed to parse multimodal-chatbot config.json: %v", clusterName, err)
 		} else {
-			llms, _ := config["llms"].([]interface{})
-			if llms == nil {
-				llms = []interface{}{}
+			// Define llm entries — managed here, not in ACM policy
+			type llmEntry struct {
+				Name              string  `json:"name"`
+				InferenceEndpoint string  `json:"inference_endpoint"`
+				APIKey            string  `json:"api_key"`
+				ModelName         string  `json:"model_name"`
+				MaxTokens         int     `json:"max_tokens"`
+				Temperature       float64 `json:"temperature"`
+				TopP              float64 `json:"top_p"`
+				PresencePenalty   float64 `json:"presence_penalty"`
+				SupportsVision    bool    `json:"supports_vision"`
+			}
+			llmDefs := []llmEntry{
+				{Name: "Granite-vision-3.2-2b", ModelName: "granite-vision-32-2b", MaxTokens: 65000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
+				{Name: "Qwen2.5-VL-7B-Instruct-FP8-Dynamic", ModelName: "qwen25-vl-7b-instruct-fp8", MaxTokens: 55000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
+				{Name: "Llama-4-Scout-17B-16E-W4A16", ModelName: "llama-4-scout-17b-16e-w4a16", MaxTokens: 350000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
 			}
 
-			// Build a map of model_name -> index for existing entries
-			nameIndex := make(map[string]int)
-			for i, entry := range llms {
-				if m, ok := entry.(map[string]interface{}); ok {
-					if name, ok := m["model_name"].(string); ok {
-						nameIndex[name] = i
-					}
-				}
-			}
-			log.Printf("[%s] multimodal-chatbot config has %d llm entries, model_names: %v", clusterName, len(llms), func() []string {
-				names := make([]string, 0, len(nameIndex))
-				for k := range nameIndex {
-					names = append(names, k)
-				}
-				return names
-			}())
-
-			// Update or add entries for each MaaS model
-			updated := 0
+			// Build MaaS model_name -> URL/token lookup from MaaS API response
+			maasModels := make(map[string]string) // model_name -> inference_endpoint
 			for _, m := range models.Data {
-				modelURL := m.URL + "/v1"
-				// Extract model_name from the last path segment of the URL
-				// e.g. http://maas.example.com/maas-demo/granite-vision-32-2b -> granite-vision-32-2b
-				modelName := ""
 				trimmed := strings.TrimRight(m.URL, "/")
 				if lastSlash := strings.LastIndex(trimmed, "/"); lastSlash >= 0 {
-					modelName = trimmed[lastSlash+1:]
-				}
-				log.Printf("[%s] MaaS model: id=%q displayName=%q url=%q model_name=%q", clusterName, m.ID, m.ModelDetails.DisplayName, m.URL, modelName)
-
-				if idx, exists := nameIndex[modelName]; exists {
-					// Update existing entry, preserving other fields
-					if entry, ok := llms[idx].(map[string]interface{}); ok {
-						entry["api_key"] = tokenResp.Token
-						entry["inference_endpoint"] = modelURL
-						updated++
-						log.Printf("[%s] Matched model %q to config entry %d", clusterName, modelName, idx)
-					}
-				} else {
-					log.Printf("[%s] Skipping model %q (no matching entry in config)", clusterName, modelName)
+					modelName := trimmed[lastSlash+1:]
+					maasModels[modelName] = m.URL + "/v1"
+					log.Printf("[%s] MaaS model: id=%q url=%q model_name=%q", clusterName, m.ID, m.URL, modelName)
 				}
 			}
-			log.Printf("[%s] multimodal-chatbot: %d models updated/added", clusterName, updated)
 
-			config["llms"] = llms
-			updatedJSON, err := json.Marshal(config)
+			// Fill in inference_endpoint and api_key for matching MaaS models
+			updated := 0
+			for i := range llmDefs {
+				if endpoint, exists := maasModels[llmDefs[i].ModelName]; exists {
+					llmDefs[i].InferenceEndpoint = endpoint
+					llmDefs[i].APIKey = tokenResp.Token
+					updated++
+					log.Printf("[%s] Matched MaaS model %q -> %s", clusterName, llmDefs[i].ModelName, endpoint)
+				} else {
+					log.Printf("[%s] No MaaS model found for %q, leaving empty", clusterName, llmDefs[i].ModelName)
+				}
+			}
+			log.Printf("[%s] multimodal-chatbot: %d/%d models matched from MaaS", clusterName, updated, len(llmDefs))
+
+			config["llms"] = llmDefs
+			updatedJSON, err := json.MarshalIndent(config, "", "    ")
 			if err != nil {
 				log.Printf("[%s] Warning: failed to marshal multimodal-chatbot config.json: %v", clusterName, err)
 			} else {
