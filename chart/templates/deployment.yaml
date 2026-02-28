@@ -70,6 +70,10 @@ spec:
             - name: MAAS_TOKEN
               value: "{{ .Values.server.maasToken }}"
             {{- end }}
+            {{- if .Values.server.chatbotConfig }}
+            - name: CHATBOT_CONFIG
+              value: {{ .Values.server.chatbotConfig | toJson }}
+            {{- end }}
             {{- if .Values.clusterAuthenticator.keycloakUrl }}
             - name: KEYCLOAK_URL
               value: "{{ .Values.clusterAuthenticator.keycloakUrl }}"

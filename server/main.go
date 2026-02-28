@@ -1126,38 +1126,31 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 		log.Printf("[%s] Updated chat-openwebui secret in chat namespace", clusterName)
 	}
 
-	// Update multimodal-chatbot secret config.json — llms array is managed entirely in Go
-	chatbotSecret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "multimodal-chatbot", metav1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		log.Printf("[%s] multimodal-chatbot secret not found, skipping", clusterName)
-	} else if err != nil {
-		log.Printf("[%s] Warning: failed to get multimodal-chatbot secret: %v", clusterName, err)
-	} else {
-		configJSON := chatbotSecret.Data["config.json"]
-		var config map[string]interface{}
-		if err := json.Unmarshal(configJSON, &config); err != nil {
-			log.Printf("[%s] Warning: failed to parse multimodal-chatbot config.json: %v", clusterName, err)
-		} else {
-			// Define llm entries — managed here, not in ACM policy
-			type llmEntry struct {
-				Name              string  `json:"name"`
-				InferenceEndpoint string  `json:"inference_endpoint"`
-				APIKey            string  `json:"api_key"`
-				ModelName         string  `json:"model_name"`
-				MaxTokens         int     `json:"max_tokens"`
-				Temperature       float64 `json:"temperature"`
-				TopP              float64 `json:"top_p"`
-				PresencePenalty   float64 `json:"presence_penalty"`
-				SupportsVision    bool    `json:"supports_vision"`
-			}
-			llmDefs := []llmEntry{
-				{Name: "Granite-vision-3.2-2b", ModelName: "granite-vision-32-2b", MaxTokens: 65000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
-				{Name: "Qwen2.5-VL-7B-Instruct-FP8-Dynamic", ModelName: "qwen25-vl-7b-instruct-fp8", MaxTokens: 55000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
-				{Name: "Llama-4-Scout-17B-16E-W4A16", ModelName: "llama-4-scout-17b-16e-w4a16", MaxTokens: 350000, Temperature: 0.01, TopP: 0.95, PresencePenalty: 1.03, SupportsVision: true},
-			}
+	// Update multimodal-chatbot secret — config from CHATBOT_CONFIG env var
+	if chatbotConfigJSON := os.Getenv("CHATBOT_CONFIG"); chatbotConfigJSON != "" {
+		type llmEntry struct {
+			Name              string  `json:"name"`
+			InferenceEndpoint string  `json:"inference_endpoint"`
+			APIKey            string  `json:"api_key"`
+			ModelName         string  `json:"model_name"`
+			MaxTokens         int     `json:"max_tokens"`
+			Temperature       float64 `json:"temperature"`
+			TopP              float64 `json:"top_p"`
+			PresencePenalty   float64 `json:"presence_penalty"`
+			SupportsVision    bool    `json:"supports_vision"`
+		}
+		type chatbotConfig struct {
+			SystemTemplate          string     `json:"system_template"`
+			TranslateSystemTemplate string     `json:"translate_system_template"`
+			LLMs                    []llmEntry `json:"llms"`
+		}
 
-			// Build MaaS model_name -> URL/token lookup from MaaS API response
-			maasModels := make(map[string]string) // model_name -> inference_endpoint
+		var cbConfig chatbotConfig
+		if err := json.Unmarshal([]byte(chatbotConfigJSON), &cbConfig); err != nil {
+			log.Printf("[%s] Warning: failed to parse CHATBOT_CONFIG: %v", clusterName, err)
+		} else {
+			// Build MaaS model_name -> URL lookup from MaaS API response
+			maasModels := make(map[string]string)
 			for _, m := range models.Data {
 				trimmed := strings.TrimRight(m.URL, "/")
 				if lastSlash := strings.LastIndex(trimmed, "/"); lastSlash >= 0 {
@@ -1169,28 +1162,42 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 
 			// Fill in inference_endpoint and api_key for matching MaaS models
 			updated := 0
-			for i := range llmDefs {
-				if endpoint, exists := maasModels[llmDefs[i].ModelName]; exists {
-					llmDefs[i].InferenceEndpoint = endpoint
-					llmDefs[i].APIKey = tokenResp.Token
+			for i := range cbConfig.LLMs {
+				if endpoint, exists := maasModels[cbConfig.LLMs[i].ModelName]; exists {
+					cbConfig.LLMs[i].InferenceEndpoint = endpoint
+					cbConfig.LLMs[i].APIKey = tokenResp.Token
 					updated++
-					log.Printf("[%s] Matched MaaS model %q -> %s", clusterName, llmDefs[i].ModelName, endpoint)
+					log.Printf("[%s] Matched MaaS model %q -> %s", clusterName, cbConfig.LLMs[i].ModelName, endpoint)
 				} else {
-					log.Printf("[%s] No MaaS model found for %q, leaving empty", clusterName, llmDefs[i].ModelName)
+					log.Printf("[%s] No MaaS model found for %q, leaving empty", clusterName, cbConfig.LLMs[i].ModelName)
 				}
 			}
-			log.Printf("[%s] multimodal-chatbot: %d/%d models matched from MaaS", clusterName, updated, len(llmDefs))
+			log.Printf("[%s] multimodal-chatbot: %d/%d models matched from MaaS", clusterName, updated, len(cbConfig.LLMs))
 
-			config["llms"] = llmDefs
-			updatedJSON, err := json.MarshalIndent(config, "", "    ")
+			configJSON, err := json.MarshalIndent(cbConfig, "", "    ")
 			if err != nil {
 				log.Printf("[%s] Warning: failed to marshal multimodal-chatbot config.json: %v", clusterName, err)
 			} else {
-				chatbotSecret.Data["config.json"] = updatedJSON
-				if _, err := spokeClient.CoreV1().Secrets("chat").Update(ctx, chatbotSecret, metav1.UpdateOptions{}); err != nil {
-					log.Printf("[%s] Warning: failed to update multimodal-chatbot secret: %v", clusterName, err)
+				chatbotSecret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "multimodal-chatbot", metav1.GetOptions{})
+				if k8serrors.IsNotFound(err) {
+					_, err = spokeClient.CoreV1().Secrets("chat").Create(ctx, &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{Name: "multimodal-chatbot", Namespace: "chat"},
+						Data:       map[string][]byte{"config.json": configJSON},
+					}, metav1.CreateOptions{})
+					if err != nil {
+						log.Printf("[%s] Warning: failed to create multimodal-chatbot secret: %v", clusterName, err)
+					} else {
+						log.Printf("[%s] Created multimodal-chatbot secret in chat namespace", clusterName)
+					}
+				} else if err != nil {
+					log.Printf("[%s] Warning: failed to get multimodal-chatbot secret: %v", clusterName, err)
 				} else {
-					log.Printf("[%s] Updated multimodal-chatbot secret in chat namespace", clusterName)
+					chatbotSecret.Data["config.json"] = configJSON
+					if _, err := spokeClient.CoreV1().Secrets("chat").Update(ctx, chatbotSecret, metav1.UpdateOptions{}); err != nil {
+						log.Printf("[%s] Warning: failed to update multimodal-chatbot secret: %v", clusterName, err)
+					} else {
+						log.Printf("[%s] Updated multimodal-chatbot secret in chat namespace", clusterName)
+					}
 				}
 			}
 		}
