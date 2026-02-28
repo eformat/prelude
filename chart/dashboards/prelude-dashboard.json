@@ -747,6 +747,211 @@
             "showTitle": true,
             "title": "Capacity Planning",
             "titleSize": "h6"
+        },
+        {
+            "collapse": false,
+            "height": "250px",
+            "panels": [
+                {
+                    "aliasColors": {
+                        "< 1h": "#73C586",
+                        "1h - 3h": "#96D98D",
+                        "3h - 6h": "#FADE2A",
+                        "6h - 12h": "#FF9900",
+                        "12h - 24h": "#E0752D",
+                        "1d - 1w": "#E02525",
+                        "> 1w": "#8F3BB8"
+                    },
+                    "bars": true,
+                    "dashLength": 10,
+                    "dashes": false,
+                    "datasource": "$datasource",
+                    "fill": 10,
+                    "id": 12,
+                    "legend": {
+                        "avg": false,
+                        "current": true,
+                        "max": false,
+                        "min": false,
+                        "show": true,
+                        "total": false,
+                        "values": true
+                    },
+                    "lines": false,
+                    "linewidth": 0,
+                    "links": [
+
+                    ],
+                    "nullPointMode": "null as zero",
+                    "percentage": false,
+                    "pointradius": 5,
+                    "points": false,
+                    "renderer": "flot",
+                    "seriesOverrides": [
+
+                    ],
+                    "spaceLength": 10,
+                    "span": 6,
+                    "stack": true,
+                    "steppedLine": false,
+                    "targets": [
+                        {
+                            "expr": "prelude_claimed_duration_le_1h",
+                            "format": "time_series",
+                            "legendFormat": "< 1h",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_le_3h",
+                            "format": "time_series",
+                            "legendFormat": "1h - 3h",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_le_6h",
+                            "format": "time_series",
+                            "legendFormat": "3h - 6h",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_le_12h",
+                            "format": "time_series",
+                            "legendFormat": "6h - 12h",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_le_24h",
+                            "format": "time_series",
+                            "legendFormat": "12h - 24h",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_le_1w",
+                            "format": "time_series",
+                            "legendFormat": "1d - 1w",
+                            "legendLink": null
+                        },
+                        {
+                            "expr": "prelude_claimed_duration_gt_1w",
+                            "format": "time_series",
+                            "legendFormat": "> 1w",
+                            "legendLink": null
+                        }
+                    ],
+                    "thresholds": [
+
+                    ],
+                    "timeFrom": null,
+                    "timeShift": null,
+                    "title": "Claimed Duration Distribution",
+                    "tooltip": {
+                        "shared": true,
+                        "sort": 2,
+                        "value_type": "individual"
+                    },
+                    "type": "graph",
+                    "xaxis": {
+                        "buckets": null,
+                        "mode": "time",
+                        "name": null,
+                        "show": true,
+                        "values": [
+
+                        ]
+                    },
+                    "yaxes": [
+                        {
+                            "format": "short",
+                            "label": "Clusters",
+                            "logBase": 1,
+                            "max": null,
+                            "min": 0,
+                            "show": true
+                        },
+                        {
+                            "format": "short",
+                            "label": null,
+                            "logBase": 1,
+                            "max": null,
+                            "min": null,
+                            "show": false
+                        }
+                    ]
+                },
+                {
+                    "datasource": "$datasource",
+                    "id": 13,
+                    "span": 6,
+                    "targets": [
+                        {
+                            "expr": "prelude_claimed_cluster_timestamp",
+                            "format": "table",
+                            "instant": true,
+                            "legendFormat": "",
+                            "legendLink": null
+                        }
+                    ],
+                    "title": "Claimed Clusters",
+                    "type": "table",
+                    "transform": "table",
+                    "columns": [
+                        {
+                            "text": "phone",
+                            "value": "phone"
+                        },
+                        {
+                            "text": "cluster",
+                            "value": "cluster"
+                        },
+                        {
+                            "text": "Value",
+                            "value": "Value"
+                        }
+                    ],
+                    "styles": [
+                        {
+                            "alias": "Phone",
+                            "pattern": "phone",
+                            "type": "string"
+                        },
+                        {
+                            "alias": "Cluster",
+                            "pattern": "cluster",
+                            "type": "string"
+                        },
+                        {
+                            "alias": "Claimed At",
+                            "pattern": "Value",
+                            "type": "date",
+                            "dateFormat": "YYYY-MM-DD HH:mm:ss",
+                            "unit": "s"
+                        },
+                        {
+                            "alias": "",
+                            "pattern": "Time",
+                            "type": "hidden"
+                        },
+                        {
+                            "alias": "",
+                            "pattern": "/.*/",
+                            "type": "hidden"
+                        }
+                    ],
+                    "fontSize": "100%",
+                    "pageSize": null,
+                    "showHeader": true,
+                    "sort": {
+                        "col": 2,
+                        "desc": true
+                    }
+                }
+            ],
+            "repeat": null,
+            "repeatIteration": null,
+            "repeatRowId": null,
+            "showTitle": true,
+            "title": "Claimed Clusters",
+            "titleSize": "h6"
         }
     ],
     "schemaVersion": 14,

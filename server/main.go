@@ -84,10 +84,49 @@ var (
 		Name: "prelude_clusters_claimed",
 		Help: "Number of ready ClusterClaims with a phone label",
 	})
+	metricClaimedInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "prelude_claimed_cluster_info",
+		Help: "Claimed cluster info (value=1 per claimed cluster)",
+	}, []string{"phone", "cluster"})
+	metricClaimedTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "prelude_claimed_cluster_timestamp",
+		Help: "Unix timestamp when each cluster was claimed",
+	}, []string{"phone", "cluster"})
+	metricClaimedDuration1h = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_1h",
+		Help: "Number of clusters claimed less than 1h ago",
+	})
+	metricClaimedDuration3h = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_3h",
+		Help: "Number of clusters claimed 1h-3h ago",
+	})
+	metricClaimedDuration6h = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_6h",
+		Help: "Number of clusters claimed 3h-6h ago",
+	})
+	metricClaimedDuration12h = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_12h",
+		Help: "Number of clusters claimed 6h-12h ago",
+	})
+	metricClaimedDuration24h = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_24h",
+		Help: "Number of clusters claimed 12h-24h ago",
+	})
+	metricClaimedDuration1w = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_le_1w",
+		Help: "Number of clusters claimed 1d-1w ago",
+	})
+	metricClaimedDurationGt1w = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "prelude_claimed_duration_gt_1w",
+		Help: "Number of clusters claimed more than 1w ago",
+	})
 )
 
 func init() {
 	prometheus.MustRegister(metricDeployments, metricClaims, metricReady, metricAvailable, metricClaimed)
+	prometheus.MustRegister(metricClaimedInfo, metricClaimedTimestamp)
+	prometheus.MustRegister(metricClaimedDuration1h, metricClaimedDuration3h, metricClaimedDuration6h,
+		metricClaimedDuration12h, metricClaimedDuration24h, metricClaimedDuration1w, metricClaimedDurationGt1w)
 }
 
 type adminLoginRequest struct {
@@ -303,7 +342,7 @@ func main() {
 	// Background goroutine to update Prometheus metrics every 30s
 	go func() {
 		for {
-			stats, err := computeClusterStats(dynClient, pool)
+			stats, err := computeClusterStats(dynClient, pool, lifetime)
 			if err != nil {
 				log.Printf("Error computing cluster stats for metrics: %v", err)
 			} else {
@@ -448,14 +487,23 @@ type clusterStats struct {
 	claimed     int
 }
 
-func computeClusterStats(dynClient dynamic.Interface, pool string) (clusterStats, error) {
+func computeClusterStats(dynClient dynamic.Interface, pool string, clusterLifetime string) (clusterStats, error) {
 	ctx := context.Background()
 	var s clusterStats
+
+	configuredDuration, _ := parseDuration(clusterLifetime)
 
 	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return s, fmt.Errorf("listing ClusterClaims: %w", err)
 	}
+
+	// Reset claimed info/timestamp gauges to clear stale entries
+	metricClaimedInfo.Reset()
+	metricClaimedTimestamp.Reset()
+
+	var bucketCounts [7]float64 // 0:<1h, 1:1-3h, 2:3-6h, 3:6-12h, 4:12-24h, 5:1d-1w, 6:>1w
+
 	for _, claim := range claims.Items {
 		if !claimMatchesPool(claim.Object, pool) {
 			continue
@@ -464,13 +512,74 @@ func computeClusterStats(dynClient dynamic.Interface, pool string) (clusterStats
 		labels := claim.GetLabels()
 		if labels != nil && labels["prelude-auth"] == "done" {
 			s.ready++
-			if labels["prelude"] != "" {
+			phone := labels["prelude"]
+			if phone != "" {
 				s.claimed++
+
+				// Set info metric
+				clusterNamespace := ""
+				if spec, ok := claim.Object["spec"].(map[string]interface{}); ok {
+					if ns, ok := spec["namespace"].(string); ok {
+						clusterNamespace = ns
+					}
+				}
+				metricClaimedInfo.WithLabelValues(phone, clusterNamespace).Set(1)
+
+				// Determine claimed-at time (for timestamp metric and duration buckets)
+				var claimedAt time.Time
+				annotations := claim.GetAnnotations()
+				if annotations != nil {
+					if tsStr, ok := annotations["prelude-claimed-at"]; ok {
+						if ts, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+							claimedAt = time.Unix(ts, 0)
+						}
+					}
+				}
+				if claimedAt.IsZero() && configuredDuration > 0 {
+					// Fallback: expiresAt - configuredLifetime
+					if spec, ok := claim.Object["spec"].(map[string]interface{}); ok {
+						if lt, ok := spec["lifetime"].(string); ok {
+							if d, err := parseDuration(lt); err == nil {
+								expiresAt := claim.GetCreationTimestamp().Time.Add(d)
+								claimedAt = expiresAt.Add(-configuredDuration)
+							}
+						}
+					}
+				}
+
+				if !claimedAt.IsZero() {
+					metricClaimedTimestamp.WithLabelValues(phone, clusterNamespace).Set(float64(claimedAt.Unix()))
+					dur := time.Since(claimedAt)
+					switch {
+					case dur < time.Hour:
+						bucketCounts[0]++
+					case dur < 3*time.Hour:
+						bucketCounts[1]++
+					case dur < 6*time.Hour:
+						bucketCounts[2]++
+					case dur < 12*time.Hour:
+						bucketCounts[3]++
+					case dur < 24*time.Hour:
+						bucketCounts[4]++
+					case dur < 7*24*time.Hour:
+						bucketCounts[5]++
+					default:
+						bucketCounts[6]++
+					}
+				}
 			} else {
 				s.available++
 			}
 		}
 	}
+
+	metricClaimedDuration1h.Set(bucketCounts[0])
+	metricClaimedDuration3h.Set(bucketCounts[1])
+	metricClaimedDuration6h.Set(bucketCounts[2])
+	metricClaimedDuration12h.Set(bucketCounts[3])
+	metricClaimedDuration24h.Set(bucketCounts[4])
+	metricClaimedDuration1w.Set(bucketCounts[5])
+	metricClaimedDurationGt1w.Set(bucketCounts[6])
 
 	deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool),
@@ -805,6 +914,14 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 				labels["prelude-fp"] = fingerprint
 			}
 			claim.SetLabels(labels)
+
+			// Set claimed-at annotation
+			annotations := claim.GetAnnotations()
+			if annotations == nil {
+				annotations = make(map[string]string)
+			}
+			annotations["prelude-claimed-at"] = strconv.FormatInt(time.Now().Unix(), 10)
+			claim.SetAnnotations(annotations)
 
 			// Set spec.lifetime = age + configured lifetime
 			configuredDuration, err := parseDuration(clusterLifetime)
