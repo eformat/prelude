@@ -884,31 +884,22 @@
                     "span": 6,
                     "targets": [
                         {
-                            "expr": "prelude_claimed_cluster_timestamp",
+                            "expr": "prelude_claimed_cluster_info",
                             "format": "table",
                             "instant": true,
                             "legendFormat": "",
-                            "legendLink": null
+                            "legendLink": null,
+                            "refId": "A"
                         }
                     ],
                     "title": "Claimed Clusters",
                     "type": "table",
-                    "transform": "table",
-                    "columns": [
-                        {
-                            "text": "phone",
-                            "value": "phone"
-                        },
-                        {
-                            "text": "cluster",
-                            "value": "cluster"
-                        },
-                        {
-                            "text": "Value",
-                            "value": "Value"
-                        }
-                    ],
                     "styles": [
+                        {
+                            "alias": "",
+                            "pattern": "/.*/",
+                            "type": "hidden"
+                        },
                         {
                             "alias": "Phone",
                             "pattern": "phone",
@@ -921,19 +912,12 @@
                         },
                         {
                             "alias": "Claimed At",
+                            "pattern": "claimed_at",
+                            "type": "string"
+                        },
+                        {
+                            "alias": "",
                             "pattern": "Value",
-                            "type": "date",
-                            "dateFormat": "YYYY-MM-DD HH:mm:ss",
-                            "unit": "s"
-                        },
-                        {
-                            "alias": "",
-                            "pattern": "Time",
-                            "type": "hidden"
-                        },
-                        {
-                            "alias": "",
-                            "pattern": "/.*/",
                             "type": "hidden"
                         }
                     ],

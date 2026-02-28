@@ -87,7 +87,7 @@ var (
 	metricClaimedInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_cluster_info",
 		Help: "Claimed cluster info (value=1 per claimed cluster)",
-	}, []string{"phone", "cluster"})
+	}, []string{"phone", "cluster", "claimed_at"})
 	metricClaimedTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_cluster_timestamp",
 		Help: "Unix timestamp when each cluster was claimed",
@@ -523,8 +523,6 @@ func computeClusterStats(dynClient dynamic.Interface, pool string, clusterLifeti
 						clusterNamespace = ns
 					}
 				}
-				metricClaimedInfo.WithLabelValues(phone, clusterNamespace).Set(1)
-
 				// Determine claimed-at time (for timestamp metric and duration buckets)
 				var claimedAt time.Time
 				annotations := claim.GetAnnotations()
@@ -547,8 +545,14 @@ func computeClusterStats(dynClient dynamic.Interface, pool string, clusterLifeti
 					}
 				}
 
+				claimedAtStr := ""
 				if !claimedAt.IsZero() {
-					metricClaimedTimestamp.WithLabelValues(phone, clusterNamespace).Set(float64(claimedAt.Unix()))
+					claimedAtStr = claimedAt.UTC().Format("2006-01-02 15:04:05")
+				}
+				metricClaimedInfo.WithLabelValues(phone, clusterNamespace, claimedAtStr).Set(1)
+
+				if !claimedAt.IsZero() {
+					metricClaimedTimestamp.WithLabelValues(phone, clusterNamespace).Set(float64(claimedAt.UnixMilli()))
 					dur := time.Since(claimedAt)
 					switch {
 					case dur < time.Hour:
