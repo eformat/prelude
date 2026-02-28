@@ -52,6 +52,11 @@ var (
 		Version:  "v1",
 		Resource: "clusteroperators",
 	}
+	certificateGVR = schema.GroupVersionResource{
+		Group:    "cert-manager.io",
+		Version:  "v1",
+		Resource: "certificates",
+	}
 	clusterPoolNamespace = "cluster-pools"
 	keycloakRealmImportGVR = schema.GroupVersionResource{
 		Group:    "k8s.keycloak.org",
@@ -419,9 +424,9 @@ func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface,
 			return fmt.Errorf("timed out waiting for cluster %s to stabilize after %v", clusterName, timeout)
 		}
 
-		stable, err := areClusterOperatorsStable(ctx, spokeDynClient, clusterName)
+		opsStable, err := areClusterOperatorsStable(ctx, spokeDynClient, clusterName)
 		if err != nil {
-			log.Printf("[%s] Error checking ClusterOperators: %v", clusterName, err)
+			log.Printf("[%s] Error checking cluster stability: %v", clusterName, err)
 			stableSince = nil
 			if !everReached {
 				now := time.Now()
@@ -437,18 +442,21 @@ func waitForStableCluster(ctx context.Context, spokeDynClient dynamic.Interface,
 		everReached = true
 		unreachableSince = nil
 
+		certsReady := areCertificatesReady(ctx, spokeDynClient, clusterName)
+		stable := opsStable && certsReady
+
 		if stable {
 			now := time.Now()
 			if stableSince == nil {
 				stableSince = &now
-				log.Printf("[%s] All ClusterOperators stable, waiting for %v stable period", clusterName, stablePeriod)
+				log.Printf("[%s] Cluster stable (operators + certs), waiting for %v stable period", clusterName, stablePeriod)
 			}
 			if time.Since(*stableSince) >= stablePeriod {
 				return nil
 			}
 		} else {
 			if stableSince != nil {
-				log.Printf("[%s] ClusterOperators became unstable, resetting stable period", clusterName)
+				log.Printf("[%s] Cluster became unstable, resetting stable period", clusterName)
 			}
 			stableSince = nil
 		}
@@ -509,6 +517,52 @@ func areClusterOperatorsStable(ctx context.Context, spokeDynClient dynamic.Inter
 	}
 
 	return allStable, nil
+}
+
+// areCertificatesReady checks if the ingress and api certificates have Ready=True.
+func areCertificatesReady(ctx context.Context, spokeDynClient dynamic.Interface, clusterName string) bool {
+	certs := []struct {
+		namespace string
+		name      string
+	}{
+		{"openshift-ingress", "apps-cert"},
+		{"openshift-config", "api-cert"},
+	}
+
+	allReady := true
+	for _, c := range certs {
+		cert, err := spokeDynClient.Resource(certificateGVR).Namespace(c.namespace).Get(ctx, c.name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("[%s] Certificate %s/%s not found: %v", clusterName, c.namespace, c.name, err)
+			allReady = false
+			continue
+		}
+
+		ready := false
+		if status, ok := cert.Object["status"].(map[string]interface{}); ok {
+			if conditions, ok := status["conditions"].([]interface{}); ok {
+				for _, cond := range conditions {
+					if cm, ok := cond.(map[string]interface{}); ok {
+						if cm["type"] == "Ready" && cm["status"] == "True" {
+							ready = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if !ready {
+			log.Printf("[%s] Certificate %s/%s not ready", clusterName, c.namespace, c.name)
+			allReady = false
+		}
+	}
+
+	if allReady {
+		log.Printf("[%s] All certificates ready", clusterName)
+	}
+
+	return allReady
 }
 
 // regenerateKubeconfig generates a new kubeconfig for the given CN via the
