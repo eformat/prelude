@@ -63,6 +63,7 @@ clusterAuthenticator:
     tag: latest
   keycloakUrl: ""
   keycloakClientSecret: ""
+  preludeUserPassword: ""
 
 client:
   image:

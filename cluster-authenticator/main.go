@@ -99,6 +99,18 @@ spec:
         - name: admin
           description: "Administrator role"
     users:
+      - username: prelude
+        enabled: true
+        emailVerified: true
+        email: prelude@demo.redhat.com
+        firstName: Prelude
+        lastName: Demo
+        credentials:
+          - type: password
+            value: $PRELUDE_PASSWORD
+            temporary: false
+        realmRoles:
+          - admin
       - username: admin
         enabled: true
         emailVerified: true
@@ -131,6 +143,7 @@ var consoleGVR = schema.GroupVersionResource{
 
 var keycloakURL string
 var keycloakClientSecret string
+var preludeUserPassword string
 
 func main() {
 	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
@@ -173,9 +186,13 @@ func main() {
 
 	keycloakURL = os.Getenv("KEYCLOAK_URL")
 	keycloakClientSecret = os.Getenv("KEYCLOAK_CLIENT_SECRET")
+	preludeUserPassword = os.Getenv("PRELUDE_USER_PASSWORD")
 	if keycloakURL != "" {
 		if keycloakClientSecret == "" {
 			log.Fatalf("KEYCLOAK_CLIENT_SECRET is required when KEYCLOAK_URL is set")
+		}
+		if preludeUserPassword == "" {
+			log.Fatalf("PRELUDE_USER_PASSWORD is required when KEYCLOAK_URL is set")
 		}
 		log.Printf("SSO setup enabled (KEYCLOAK_URL=%s)", keycloakURL)
 	} else {
@@ -335,7 +352,7 @@ func authenticateCluster(ctx context.Context, hubDynClient dynamic.Interface, hu
 	// Done before stability check so the authentication operator can find the realm
 	if keycloakURL != "" {
 		log.Printf("[%s] Creating KeycloakRealmImport", clusterName)
-		if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, keycloakURL, keycloakClientSecret); err != nil {
+		if err := createKeycloakRealm(ctx, hubDynClient, hubClientset, clusterName, keycloakURL, keycloakClientSecret, preludeUserPassword); err != nil {
 			log.Printf("Warning: [%s] SSO realm creation failed: %v", clusterName, err)
 		}
 	}
@@ -1098,7 +1115,7 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 }
 
 // createKeycloakRealm creates or updates a KeycloakRealmImport CR on the hub cluster.
-func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, keycloakURL, clientSecret string) error {
+func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, clusterName, keycloakURL, clientSecret, preludePassword string) error {
 	// Generate random initial password (overwritten by server at claim time)
 	pwBytes := make([]byte, 16)
 	if _, err := rand.Read(pwBytes); err != nil {
@@ -1110,6 +1127,7 @@ func createKeycloakRealm(ctx context.Context, hubDynClient dynamic.Interface, hu
 	rendered := keycloakRealmTemplate
 	rendered = strings.ReplaceAll(rendered, "$CLUSTER_NAME", clusterName)
 	rendered = strings.ReplaceAll(rendered, "$CLIENT_SECRET", clientSecret)
+	rendered = strings.ReplaceAll(rendered, "$PRELUDE_PASSWORD", preludePassword)
 	rendered = strings.ReplaceAll(rendered, "$CHANGEME", initialPassword)
 
 	// Parse YAML into unstructured object
