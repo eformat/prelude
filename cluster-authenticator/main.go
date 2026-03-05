@@ -79,6 +79,7 @@ spec:
     registrationAllowed: false
     loginWithEmailAllowed: true
     duplicateEmailsAllowed: false
+    loginTheme: prelude
     clients:
       - clientId: ocp-idp
         enabled: true
