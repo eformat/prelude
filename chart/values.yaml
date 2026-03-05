@@ -44,6 +44,15 @@ server:
                 "top_p": 0.95,
                 "presence_penalty": 1.03,
                 "supports_vision": true
+            },
+            {
+              "name": "Qwen3.5-9B",
+              "model_name": "qwen35-9b",
+              "max_tokens": 55000,
+              "temperature": 0.01,
+              "top_p": 0.95,
+              "presence_penalty": 1.03,
+              "supports_vision": true
             }
         ]
     }
