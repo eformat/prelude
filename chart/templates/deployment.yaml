@@ -62,6 +62,10 @@ spec:
             - name: HIDE_KUBECONFIG
               value: "true"
             {{- end }}
+            {{- if .Values.server.hideOpenshiftConsole }}
+            - name: HIDE_OPENSHIFT_CONSOLE
+              value: "true"
+            {{- end }}
             {{- if .Values.server.maasUrl }}
             - name: MAAS_URL
               value: "{{ .Values.server.maasUrl }}"

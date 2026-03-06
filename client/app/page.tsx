@@ -230,6 +230,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [hideKubeconfig, setHideKubeconfig] = useState(false);
+  const [hideConsole, setHideConsole] = useState(false);
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -247,6 +248,9 @@ export default function Home() {
       .then((data) => {
         if (data.hideKubeconfig) {
           setHideKubeconfig(true);
+        }
+        if (data.hideConsole) {
+          setHideConsole(true);
         }
       })
       .catch(() => {});
@@ -754,6 +758,7 @@ export default function Home() {
               </div>
 
               {/* OpenShift Console URL Card */}
+              {!hideConsole && (
               <div
                 className="bg-white border border-rh-gray-20 animate-fade-in-up"
                 style={{ animationDelay: '0.15s' }}
@@ -790,6 +795,7 @@ export default function Home() {
                   </p>
                 </div>
               </div>
+              )}
 
               {/* Cluster Lifetime Card */}
               <div

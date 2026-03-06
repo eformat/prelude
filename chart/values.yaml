@@ -11,6 +11,7 @@ server:
   recaptchaSecretKey: ""
   adminPassword: ""
   hideKubeconfig: true
+  hideOpenshiftConsole: true
   maasUrl: ""
   maasToken: ""
   chatbotConfig: |

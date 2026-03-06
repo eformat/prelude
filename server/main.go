@@ -52,6 +52,7 @@ var (
 var recaptchaSecretKey string
 var recaptchaSiteKey string
 var hideKubeconfig bool
+var hideConsole bool
 
 var adminPassword string
 var maasURL string
@@ -289,6 +290,10 @@ func main() {
 	if hideKubeconfig {
 		log.Printf("Kubeconfig display hidden from client")
 	}
+	hideConsole = os.Getenv("HIDE_OPENSHIFT_CONSOLE") == "true"
+	if hideConsole {
+		log.Printf("OpenShift Console URL display hidden from client")
+	}
 	if recaptchaSecretKey != "" {
 		log.Printf("reCAPTCHA verification enabled")
 	} else {
@@ -389,6 +394,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"recaptchaSiteKey": recaptchaSiteKey,
 		"hideKubeconfig":   hideKubeconfig,
+		"hideConsole":      hideConsole,
 	})
 }
 
