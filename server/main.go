@@ -1023,7 +1023,7 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 	// Update MaaS credentials on the spoke cluster if configured
 	if maasURL != "" && maasToken != "" {
-		if err := updateMaaSCredentials(adminKubeconfigData, maasURL, maasToken, clusterName, clusterLifetime); err != nil {
+		if err := updateMaaSCredentials(adminKubeconfigData, maasURL, maasToken, clusterName, clusterLifetime, webConsoleURL); err != nil {
 			log.Printf("Warning: failed to update MaaS credentials on %s: %v", clusterName, err)
 		}
 	}
@@ -1089,7 +1089,7 @@ func extractKubeconfig(secret *corev1.Secret) string {
 // updateMaaSCredentials obtains a MaaS token, lists available models, and
 // updates the chat-openwebui ConfigMap and Secret on the spoke cluster.
 // The MaaS token expiration matches the cluster lifetime.
-func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterName, clusterLifetime string) error {
+func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterName, clusterLifetime, webConsoleURL string) error {
 	maasHost := strings.TrimRight(maasBaseURL, "/")
 
 	// Convert cluster lifetime to MaaS token expiration
@@ -1224,17 +1224,79 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 		log.Printf("[%s] Updated chat-openwebui configmap in chat namespace", clusterName)
 	}
 
+	// Build TOOL_SERVER_CONNECTIONS from webConsoleURL apps domain
+	toolServerConnections := ""
+	if webConsoleURL != "" {
+		// Extract apps domain: https://console-openshift-console.apps.X -> apps.X
+		appsDomain := ""
+		if idx := strings.Index(webConsoleURL, "console-openshift-console."); idx >= 0 {
+			appsDomain = webConsoleURL[idx+len("console-openshift-console."):]
+		}
+		if appsDomain != "" {
+			type toolServerInfo struct {
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}
+			type toolConfigEnabled struct {
+				Enabled bool   `json:"enable"`
+			}
+			type toolServerConnection struct {
+				Type     string         `json:"type"`
+				URL      string         `json:"url"`
+				SpecType string         `json:"spec_type"`
+				Spec     string         `json:"spec"`
+				Path     string         `json:"path"`
+				AuthType string         `json:"auth_type"`
+				Key      string         `json:"key"`
+				Info     toolServerInfo `json:"info"`
+				Config   toolConfigEnabled `json:"config"`
+			}
+			connections := []toolServerConnection{
+				{
+					Type:     "openapi",
+					URL:      "https://mcp-weather-chat." + appsDomain,
+					SpecType: "url",
+					Path:     "openapi.json",
+					AuthType: "none",
+					Info:     toolServerInfo{},
+					Config:   toolConfigEnabled{Enabled: true},
+				},
+				{
+					Type:     "openapi",
+					URL:      "https://kubernetes-mcp-server-chat." + appsDomain,
+					SpecType: "url",
+					Path:     "openapi.json",
+					AuthType: "bearer",
+					Info:     toolServerInfo{},
+					Config:   toolConfigEnabled{Enabled: true},
+				},
+			}
+			connJSON, err := json.Marshal(connections)
+			if err != nil {
+				log.Printf("[%s] Warning: failed to marshal TOOL_SERVER_CONNECTIONS: %v", clusterName, err)
+			} else {
+				toolServerConnections = string(connJSON)
+				log.Printf("[%s] Built TOOL_SERVER_CONNECTIONS with apps domain %s", clusterName, appsDomain)
+			}
+		}
+	}
+
 	// Create/update Secret chat-openwebui in chat namespace
 	secret, err := spokeClient.CoreV1().Secrets("chat").Get(ctx, "chat-openwebui", metav1.GetOptions{})
 	if k8serrors.IsNotFound(err) {
+		secretData := map[string][]byte{
+			"OPENAI_API_KEYS": []byte(apiKeys),
+		}
+		if toolServerConnections != "" {
+			secretData["TOOL_SERVER_CONNECTIONS"] = []byte(toolServerConnections)
+		}
 		secret = &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "chat-openwebui",
 				Namespace: "chat",
 			},
-			Data: map[string][]byte{
-				"OPENAI_API_KEYS": []byte(apiKeys),
-			},
+			Data: secretData,
 		}
 		if _, err := spokeClient.CoreV1().Secrets("chat").Create(ctx, secret, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("creating chat-openwebui secret: %w", err)
@@ -1247,6 +1309,9 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 			secret.Data = make(map[string][]byte)
 		}
 		secret.Data["OPENAI_API_KEYS"] = []byte(apiKeys)
+		if toolServerConnections != "" {
+			secret.Data["TOOL_SERVER_CONNECTIONS"] = []byte(toolServerConnections)
+		}
 		if _, err := spokeClient.CoreV1().Secrets("chat").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("updating chat-openwebui secret: %w", err)
 		}

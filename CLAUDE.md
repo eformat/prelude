@@ -150,6 +150,19 @@ The server performs the following steps when MaaS is configured:
    type: Opaque
    ```
 
+   ```bash
+   # Secret
+   oc -n chat get secret chat-openwebui
+   apiVersion: v1
+   stringData:
+     TOOL_SERVER_CONNECTIONS: '[{"type":"openapi","url":"https://mcp-weather-chat.apps.prelude-q8jzk.sandbox1763.opentlc.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"none","key":"","info":{"id":"","name":"","description":""}},{"type":"openapi","url":"https://kubernetes-mcp-server-chat.apps.apps.prelude-q8jzk.sandbox1763.opentlc.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"","info":{"id":"","name":"","description":""}}]'
+   kind: Secret
+   metadata:
+     name: chat-openwebui
+     namespace: chat
+   type: Opaque
+   ```
+
    Update the existing config.json with models found in MaaS. Use the "model_name" as identifier. If already found, update the api_key with the token and inference_endpoint. Leave the other parameters as they are in the config map.
 
    ```bash
