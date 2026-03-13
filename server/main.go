@@ -1259,7 +1259,7 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 					SpecType: "url",
 					Path:     "openapi.json",
 					AuthType: "none",
-					Info:     toolServerInfo{},
+					Info:     toolServerInfo{Name: "Weather MCP Server", Description: "Weather MCP Server"},
 					Config:   toolConfigEnabled{Enabled: true},
 				},
 				{
@@ -1268,7 +1268,7 @@ func updateMaaSCredentials(spokeKubeconfig, maasBaseURL, maasUserToken, clusterN
 					SpecType: "url",
 					Path:     "openapi.json",
 					AuthType: "bearer",
-					Info:     toolServerInfo{},
+					Info:     toolServerInfo{Name: "Kubernetes MCP Server", Description: "Kubernetes MCP Server"},
 					Config:   toolConfigEnabled{Enabled: true},
 				},
 			}
