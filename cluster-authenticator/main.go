@@ -1044,7 +1044,28 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 		return false, nil
 	}
 
-	log.Printf("[%s] CSR signer has rolled (expires %s), regenerating kubeconfig certs", clusterName, signerExpiry.Format(time.RFC3339))
+	// Check CSR signer-signer expiry on spoke
+	signerSignerSecret, err := spokeClientset.CoreV1().Secrets("openshift-kube-controller-manager-operator").Get(ctx, "csr-signer-signer", metav1.GetOptions{})
+	if err != nil {
+		return false, fmt.Errorf("getting csr-signer-signer secret: %w", err)
+	}
+
+	signerSignerCertPEM, ok := signerSignerSecret.Data["tls.crt"]
+	if !ok {
+		return false, fmt.Errorf("csr-signer-signer secret has no tls.crt data")
+	}
+
+	signerSignerExpiry, err := parseCertExpiry(signerSignerCertPEM)
+	if err != nil {
+		return false, fmt.Errorf("parsing csr-signer-signer cert expiry: %w", err)
+	}
+
+	if time.Until(signerSignerExpiry) <= 25*24*time.Hour {
+		log.Printf("[%s] CSR signer-signer expires at %s (within 25 days), signer-signer hasn't rolled yet — skipping", clusterName, signerSignerExpiry.Format(time.RFC3339))
+		return false, nil
+	}
+
+	log.Printf("[%s] CSR signer has rolled (expires %s), signer-signer has rolled (expires %s), regenerating kubeconfig certs", clusterName, signerExpiry.Format(time.RFC3339), signerSignerExpiry.Format(time.RFC3339))
 
 	// Regenerate system:admin kubeconfig
 	log.Printf("[%s] Regenerating system:admin kubeconfig", clusterName)

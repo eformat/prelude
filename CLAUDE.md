@@ -305,6 +305,8 @@ OpenShift CSR signer is only valid for 24hr on first install. It is rotated to a
 ```bash
 # check if csr signer expires within 25 days
 oc get secret/csr-signer -n openshift-kube-controller-manager-operator -o template='{{index .data "tls.crt"}}' | base64 -d | openssl x509 -checkend 2160000 -noout
+# check if the csr-signer-signer expires within 25 days
+oc get secret/csr-signer-signer -n openshift-kube-controller-manager-operator -o template='{{index .data "tls.crt"}}' | base64 -d | openssl x509 -checkend 2160000 -noout
 ```
 
 If the signer has rolled (expiry > 25 days), the cluster is added to an in-memory set and is not checked again. If the signer has not yet rolled (expiry <= 25 days), the cluster continues to be checked every 10 minutes.
