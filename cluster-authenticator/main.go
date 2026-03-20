@@ -1074,6 +1074,19 @@ func checkAndRenewCerts(ctx context.Context, hubDynClient dynamic.Interface, hub
 		return false, fmt.Errorf("regenerating system:admin kubeconfig: %w", err)
 	}
 
+	// Verify the issued client cert has a long expiry (> 25 days)
+	// The kube-controller-manager may not have loaded the new signer yet,
+	// in which case the cert will be short-lived (capped by old signer expiry).
+	adminCertExpiry, err := extractKubeconfigClientCertExpiry(adminKubeconfig)
+	if err != nil {
+		log.Printf("[%s] Warning: could not check issued cert expiry: %v", clusterName, err)
+	} else if time.Until(adminCertExpiry) <= 25*24*time.Hour {
+		log.Printf("[%s] Issued system:admin cert expires at %s (within 25 days) — kube-controller-manager hasn't loaded new signer yet, will retry", clusterName, adminCertExpiry.Format(time.RFC3339))
+		return false, nil
+	} else {
+		log.Printf("[%s] Issued system:admin cert expires at %s (long-lived, OK)", clusterName, adminCertExpiry.Format(time.RFC3339))
+	}
+
 	// Update admin kubeconfig secret on hub
 	log.Printf("[%s] Updating admin kubeconfig secret on hub", clusterName)
 	adminSecret.Data["kubeconfig"] = []byte(adminKubeconfig)
@@ -1126,6 +1139,16 @@ func extractClientCertFromKubeconfig(kubeconfigData string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("no client-certificate-data found in kubeconfig")
+}
+
+// extractKubeconfigClientCertExpiry parses a kubeconfig string and returns the
+// expiry time of the client certificate.
+func extractKubeconfigClientCertExpiry(kubeconfigData string) (time.Time, error) {
+	certPEM, err := extractClientCertFromKubeconfig(kubeconfigData)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parseCertExpiry(certPEM)
 }
 
 // sleepOrDone sleeps for the given duration or returns early if the context is cancelled.
