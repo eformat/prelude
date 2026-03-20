@@ -46,7 +46,7 @@ oc -n $CLUSTER_NAME get clusterdeployment $CLUSTER_NAME -o template='{{ index .s
 We can derive the spoke cluster ai console url by using the webConsoleURL as follows:
 
 ```bash
-echo https://console-openshift-console.apps.prelude-q8jzk.sandbox1763.opentlc.com |sed "s/console-openshift-console/data-science-gateway/"
+echo https://console-openshift-console.apps.example.com |sed "s/console-openshift-console/data-science-gateway/"
 ```
 
 We look up both the admin and user kubeconfig secrets from the spoke cluster. The admin kubeconfig secret name comes from `spec.clusterMetadata.adminKubeconfigSecretRef.name` on the ClusterDeployment. The user kubeconfig secret name is derived by replacing `-admin-kubeconfig` with `-user-kubeconfig`. For example:
@@ -155,7 +155,7 @@ The server performs the following steps when MaaS is configured:
    oc -n chat get secret chat-openwebui
    apiVersion: v1
    stringData:
-     TOOL_SERVER_CONNECTIONS: '[{"type":"openapi","url":"https://mcp-weather-chat.apps.prelude-q8jzk.sandbox1763.opentlc.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"none","key":"","info":{"id":"","name":"","description":""}},{"type":"openapi","url":"https://kubernetes-mcp-server-chat.apps.apps.prelude-q8jzk.sandbox1763.opentlc.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"","info":{"id":"","name":"","description":""}}]'
+     TOOL_SERVER_CONNECTIONS: '[{"type":"openapi","url":"https://mcp-weather-chat.apps.example.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"none","key":"","info":{"id":"","name":"","description":""}},{"type":"openapi","url":"https://kubernetes-mcp-server-chat.apps.example.com","spec_type":"url","spec":"","path":"openapi.json","auth_type":"bearer","key":"","info":{"id":"","name":"","description":""}}]'
    kind: Secret
    metadata:
      name: chat-openwebui
