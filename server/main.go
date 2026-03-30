@@ -1035,8 +1035,10 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		}
 	}
 
-	// Derive AI console URL by replacing console-openshift-console with data-science-gateway
-	aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
+	// Old quickstart - Derive AI console URL by replacing console-openshift-console with data-science-gateway
+	//aiConsoleURL := strings.Replace(webConsoleURL, "console-openshift-console", "data-science-gateway", 1) + "/learning-resources?&keyword=prelude"
+	// New workshop path
+	aiConsoleURL :=webConsoleURL +  "/rhai-workshop"
 
 	resp := claimResponse{
 		WebConsoleURL: webConsoleURL,
