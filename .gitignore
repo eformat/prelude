@@ -17,3 +17,6 @@ client/out/
 server/.next/trace
 server/.next/trace-build
 client/app/firebase.ts
+
+.vscode/
+.claude/
