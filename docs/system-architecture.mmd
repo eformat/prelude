@@ -1,0 +1,94 @@
+graph TB
+    subgraph User["User Device"]
+        Browser["Browser<br/>(Next.js Client)"]
+        Phone["Mobile Phone"]
+    end
+
+    subgraph Firebase["Firebase Auth"]
+        RecaptchaV2["reCAPTCHA v2<br/>(Invisible)"]
+        SMSV["SMS Verification"]
+    end
+
+    RecaptchaV3["reCAPTCHA v3<br/>(Score Verification)"]
+
+    subgraph PreludePod["Prelude Pod"]
+        Client["Next.js Client<br/>:3000"]
+        Server["Go API Server<br/>:8080 / :9090 metrics"]
+        Claimer["Cluster Claimer<br/>(sidecar)"]
+        Authenticator["Cluster Authenticator<br/>(sidecar)"]
+    end
+
+    subgraph HubCluster["ACM Hub Cluster"]
+        subgraph ACM["Advanced Cluster Management"]
+            ClusterPool["ClusterPool<br/>(prelude-*)"]
+            ClusterClaims["ClusterClaims<br/>(prelude1, prelude2, ...)"]
+            ClusterDeployments["ClusterDeployments<br/>(Hive)"]
+        end
+        subgraph KeycloakNS["Keycloak Namespace"]
+            Keycloak["Keycloak SSO"]
+            Realms["Realm per Cluster<br/>(KeycloakRealmImport)"]
+        end
+        KubeConfig["Kubeconfig Secret<br/>(admin + user)"]
+    end
+
+    subgraph SpokeCluster["Spoke Clusters (OpenShift)"]
+        Console["Web Console"]
+        DSAI["Data Science /<br/>AI Gateway"]
+        ChatNS["chat namespace"]
+        OpenWebUI["Open WebUI"]
+        MultimodalBot["Multimodal Chatbot"]
+        CSRSigner["CSR Signer<br/>(Certificate Rotation)"]
+    end
+
+    MaaS["MaaS<br/>(Model as a Service)"]
+
+    Browser -->|"Phone + Password"| Client
+    Phone -->|"SMS Code"| Browser
+    Client -->|"Server Action"| Server
+    Browser -->|"signInWithPhoneNumber()"| Firebase
+    Firebase -->|"SMS"| Phone
+    Browser -->|"Fingerprint + Token"| Client
+    RecaptchaV3 -.->|"Score ≥ 0.5"| Server
+
+    Server -->|"Label ClusterClaim<br/>prelude=phone"| ClusterClaims
+    Server -->|"Get webConsoleURL"| ClusterDeployments
+    Server -->|"Read kubeconfig"| KubeConfig
+    Server -->|"Set user password"| Keycloak
+    Server -->|"Get token + models"| MaaS
+    Server -->|"Update ConfigMap/Secret"| ChatNS
+
+    Claimer -->|"Watch ClusterDeployments"| ClusterDeployments
+    Claimer -->|"Create ClusterClaims"| ClusterClaims
+    ClusterPool -->|"Provision"| ClusterDeployments
+    ClusterClaims -->|"Bind"| ClusterDeployments
+
+    Authenticator -->|"Watch ClusterClaims"| ClusterClaims
+    Authenticator -->|"Wait for stable cluster"| SpokeCluster
+    Authenticator -->|"Regenerate kubeconfig<br/>(CSR flow)"| CSRSigner
+    Authenticator -->|"Update secret"| KubeConfig
+    Authenticator -->|"Label prelude-auth=done"| ClusterClaims
+    Authenticator -->|"Create Realm"| Keycloak
+    Authenticator -->|"Check CSR signer expiry"| CSRSigner
+
+    MaaS -->|"Token + Model URLs"| Server
+    OpenWebUI --> ChatNS
+    MultimodalBot --> ChatNS
+
+    Server -->|"Console URL +<br/>AI URL +<br/>Kubeconfig +<br/>Expiry"| Client
+    Client -->|"Display credentials"| Browser
+
+    classDef user fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
+    classDef firebase fill:#FFF3E0,stroke:#E65100,color:#BF360C
+    classDef prelude fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    classDef hub fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C
+    classDef spoke fill:#FFF8E1,stroke:#F57F17,color:#E65100
+    classDef maas fill:#FCE4EC,stroke:#AD1457,color:#880E4F
+    classDef recaptcha fill:#FFF3E0,stroke:#E65100,color:#BF360C
+
+    class Browser,Phone user
+    class RecaptchaV2,SMSV firebase
+    class RecaptchaV3 recaptcha
+    class Client,Server,Claimer,Authenticator prelude
+    class ClusterPool,ClusterClaims,ClusterDeployments,Keycloak,Realms,KubeConfig hub
+    class Console,DSAI,ChatNS,OpenWebUI,MultimodalBot,CSRSigner spoke
+    class MaaS maas

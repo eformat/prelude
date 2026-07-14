@@ -1,0 +1,106 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant Phone as Mobile Phone
+    participant Browser as Next.js Client<br/>(Browser)
+    participant Firebase as Firebase Auth
+    participant ServerAction as Next.js<br/>Server Action
+    participant GoServer as Go API Server
+    participant RecaptchaV3 as reCAPTCHA v3
+    participant Hub as ACM Hub Cluster
+    participant Keycloak as Keycloak SSO
+    participant MaaS as MaaS API
+    participant Spoke as Spoke Cluster
+
+    note over User,Spoke: Phase 1 — Background Provisioning (Cluster Claimer + Authenticator)
+
+    rect rgb(240, 230, 255)
+        Hub->>Hub: ClusterPool provisions ClusterDeployments
+        note right of Hub: Hive creates clusters<br/>from pool template
+
+        loop Watch ClusterDeployments
+            GoServer-->>Hub: Cluster Claimer watches for Provisioned=True
+            GoServer->>Hub: Create ClusterClaims (prelude1, prelude2, ...)
+            note right of GoServer: Up to cluster-claim-limit<br/>Dynamic scaling when<br/>available ≤ threshold
+        end
+
+        loop Watch ClusterClaims (bound)
+            GoServer-->>Hub: Cluster Authenticator watches for bound claims
+            GoServer->>Spoke: Wait for stable cluster<br/>(ClusterOperators + certs ready)
+            GoServer->>Spoke: Generate system:admin kubeconfig (CSR flow)
+            GoServer->>Hub: Update admin kubeconfig secret
+            GoServer->>Spoke: Generate admin user kubeconfig (CSR flow)
+            GoServer->>Hub: Create/update user kubeconfig secret
+            GoServer->>Spoke: Create prelude ConfigMap
+            GoServer->>Keycloak: Create KeycloakRealmImport for cluster
+            GoServer->>Hub: Label ClusterClaim prelude-auth=done
+            note right of GoServer: Cluster now eligible<br/>for user assignment
+        end
+
+        loop Every 10 minutes
+            GoServer->>Spoke: Check CSR signer expiry
+            alt Signer rolled (expiry > 25 days)
+                GoServer->>Spoke: Regenerate kubeconfigs if client cert < 1 day
+                GoServer->>Hub: Update kubeconfig secrets
+            end
+        end
+    end
+
+    note over User,Spoke: Phase 2 — User Claims a Cluster
+
+    rect rgb(232, 245, 233)
+        User->>Browser: Enter phone number + admin password
+        Browser->>Firebase: signInWithPhoneNumber()
+        Firebase->>Phone: Send SMS verification code
+        Phone->>User: Receive SMS
+        User->>Browser: Enter 6-digit code
+        Browser->>Firebase: confirm(code)
+        Firebase-->>Browser: Phone verified ✓
+
+        Browser->>Browser: Generate browser fingerprint<br/>(SHA-256 of canvas, screen, etc.)
+        Browser->>RecaptchaV3: Execute reCAPTCHA v3
+        RecaptchaV3-->>Browser: Token
+
+        Browser->>ServerAction: claimCluster(phone, password,<br/>fingerprint, recaptchaToken)
+        ServerAction->>GoServer: POST /api/claim
+
+        GoServer->>RecaptchaV3: Verify token (score ≥ 0.5)
+        RecaptchaV3-->>GoServer: Score OK ✓
+
+        GoServer->>Hub: Check fingerprint on existing ClusterClaims
+        alt Fingerprint already used with different phone
+            GoServer-->>Browser: 403 device_already_claimed
+        end
+
+        GoServer->>Hub: Find ClusterClaims with<br/>prelude-auth=done
+
+        alt Phone matches existing claim
+            GoServer->>Hub: Get ClusterDeployment
+        else No match — assign new cluster
+            GoServer->>Hub: Label ClusterClaim<br/>prelude=<phone>
+            GoServer->>Hub: Label ClusterClaim<br/>prelude-fp=<fingerprint>
+            GoServer->>Hub: Set spec.lifetime<br/>(age + cluster-lifetime)
+        end
+
+        GoServer->>Hub: Get ClusterDeployment<br/>(webConsoleURL)
+        GoServer->>Hub: Read admin + user<br/>kubeconfig secrets
+
+        GoServer->>Keycloak: Get master realm token
+        GoServer->>Keycloak: Set admin user password<br/>on cluster realm
+
+        opt MaaS configured
+            GoServer->>MaaS: POST /tokens (with expiry)
+            MaaS-->>GoServer: Token
+            GoServer->>MaaS: GET /models
+            MaaS-->>GoServer: Model URLs
+            GoServer->>Spoke: Update chat ConfigMap<br/>(OPENAI_API_BASE_URLS)
+            GoServer->>Spoke: Update chat Secret<br/>(OPENAI_API_KEYS)
+            GoServer->>Spoke: Update multimodal-chatbot<br/>Secret (config.json)
+            GoServer->>Spoke: Restart chat pods
+        end
+
+        GoServer-->>ServerAction: Console URL + AI URL +<br/>Kubeconfig + expiresAt
+        ServerAction-->>Browser: Cluster credentials
+
+        Browser->>User: Display Web Console URL<br/>AI Gateway URL<br/>Kubeconfig download<br/>Expiry countdown
+    end
