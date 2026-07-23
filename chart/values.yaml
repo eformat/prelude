@@ -62,6 +62,7 @@ clusterClaimer:
   image:
     repository: quay.io/eformat/prelude-cluster-claimer
     tag: latest
+  clusterClaimName: "prelude"
   clusterClaimLimit: "4"
   clusterClaimMax: "10"
   clusterClaimIncrement: "1"

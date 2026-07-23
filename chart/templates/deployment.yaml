@@ -106,6 +106,8 @@ spec:
             {{- end }}
             - name: CLUSTER_POOL
               value: "{{ .Values.server.clusterPool }}"
+            - name: CLUSTER_CLAIM_NAME
+              value: "{{ .Values.clusterClaimer.clusterClaimName }}"
             - name: CLUSTER_CLAIM_LIMIT
               value: "{{ .Values.clusterClaimer.clusterClaimLimit }}"
             - name: CLUSTER_CLAIM_MAX

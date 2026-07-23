@@ -40,6 +40,7 @@ func main() {
 	clusterClaimMaxStr := flag.String("cluster-claim-max", os.Getenv("CLUSTER_CLAIM_MAX"), "Maximum number of ClusterClaims when scaling up (default 10)")
 	clusterClaimIncrementStr := flag.String("cluster-claim-increment", os.Getenv("CLUSTER_CLAIM_INCREMENT"), "Number of ClusterClaims to add when scaling up (default 1)")
 	clusterClaimAvailableThresholdStr := flag.String("cluster-claim-available-threshold", os.Getenv("CLUSTER_CLAIM_AVAILABLE_THRESHOLD"), "Available cluster count at which to trigger scale-up (default 1)")
+	clusterClaimName := flag.String("cluster-claim-name", os.Getenv("CLUSTER_CLAIM_NAME"), "Name prefix for created ClusterClaims (default \"prelude\")")
 	flag.Parse()
 
 	if *clusterPool == "" {
@@ -80,7 +81,13 @@ func main() {
 		claimMax = claimLimit
 	}
 
+	claimNamePrefix := "prelude"
+	if *clusterClaimName != "" {
+		claimNamePrefix = *clusterClaimName
+	}
+
 	log.Printf("Cluster pool: %s", *clusterPool)
+	log.Printf("Cluster claim name prefix: %s", claimNamePrefix)
 	log.Printf("Cluster claim limit: %d (max: %d, increment: %d, available threshold: %d)", claimLimit, claimMax, claimIncrement, availableThreshold)
 
 	config, err := buildConfig()
@@ -113,7 +120,7 @@ func main() {
 	}
 
 	// Step 2: Reconcile loop — watch for changes and create claims as needed
-	reconcile(ctx, dynClient, pool, claimLimit, claimMax, claimIncrement, availableThreshold)
+	reconcile(ctx, dynClient, pool, claimNamePrefix, claimLimit, claimMax, claimIncrement, availableThreshold)
 	log.Printf("Cluster claimer shutting down")
 }
 
@@ -122,7 +129,7 @@ func main() {
 // limit starts at baseLimit and increases when no clusters are available,
 // up to maxLimit. It scales back down to baseLimit after clusters have been
 // available for 10 minutes (hysteresis).
-func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, baseLimit, maxLimit, increment, availableThreshold int) {
+func reconcile(ctx context.Context, dynClient dynamic.Interface, pool, claimNamePrefix string, baseLimit, maxLimit, increment, availableThreshold int) {
 	labelSelector := fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool)
 	effectiveLimit := baseLimit
 	var availableSince time.Time // when available clusters were first seen
@@ -166,7 +173,7 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, ba
 		}
 
 		// Check and create any needed claims
-		created := createNeededClaims(ctx, dynClient, pool, effectiveLimit)
+		created := createNeededClaims(ctx, dynClient, pool, claimNamePrefix, effectiveLimit)
 		if created > 0 {
 			log.Printf("Reconcile: created %d claim(s)", created)
 		}
@@ -209,7 +216,7 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, pool string, ba
 
 // createNeededClaims checks how many claims are needed and creates them.
 // Returns the number of claims created.
-func createNeededClaims(ctx context.Context, dynClient dynamic.Interface, pool string, claimLimit int) int {
+func createNeededClaims(ctx context.Context, dynClient dynamic.Interface, pool, claimNamePrefix string, claimLimit int) int {
 	needed, err := claimsNeeded(ctx, dynClient, pool, claimLimit)
 	if err != nil {
 		log.Printf("Error determining claims needed: %v", err)
@@ -227,7 +234,7 @@ func createNeededClaims(ctx context.Context, dynClient dynamic.Interface, pool s
 
 	created := 0
 	for i := 1; created < needed; i++ {
-		name := fmt.Sprintf("prelude%d", i)
+		name := fmt.Sprintf("%s%d", claimNamePrefix, i)
 		if existingNames[name] {
 			continue
 		}

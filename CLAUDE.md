@@ -220,13 +220,14 @@ A separate Go binary (`cluster-claimer/`) that automates initial cluster provisi
 The cluster-claimer accepts the following flags:
 
 - `--cluster-pool` (or `CLUSTER_POOL` env var) — the ClusterPool name to watch (required)
+- `--cluster-claim-name` (or `CLUSTER_CLAIM_NAME` env var) — name prefix for created ClusterClaims (default `"prelude"`, produces `prelude1`, `prelude2`, …)
 - `--cluster-claim-limit` (or `CLUSTER_CLAIM_LIMIT` env var) — base number of ClusterClaims to create (default `4`)
 - `--cluster-claim-max` (or `CLUSTER_CLAIM_MAX` env var) — maximum number of ClusterClaims when scaling up (default `10`)
 - `--cluster-claim-increment` (or `CLUSTER_CLAIM_INCREMENT` env var) — number of claims to add each time the limit scales up (default `1`)
 - `--cluster-claim-available-threshold` (or `CLUSTER_CLAIM_AVAILABLE_THRESHOLD` env var) — available cluster count at or below which to trigger scale-up (default `1`)
 
 ```bash
-./cluster-claimer --cluster-pool prelude-q8jzk --cluster-claim-limit 4 --cluster-claim-max 10 --cluster-claim-increment 1
+./cluster-claimer --cluster-pool prelude-q8jzk --cluster-claim-name prelude --cluster-claim-limit 4 --cluster-claim-max 10 --cluster-claim-increment 1
 ```
 
 ClusterClaim names are derived automatically. The claimer compares provisioned ClusterDeployments against existing ClusterClaims for the pool, and creates claims for any gap using generated names (`prelude1`, `prelude2`, etc.), skipping names that already exist. The total number of claims is capped by the effective claim limit.
