@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,18 +36,36 @@ var (
 	clusterPoolNamespace = "cluster-pools"
 )
 
+// poolConfig is one entry of the optional CLUSTER_POOL_CONFIG JSON array.
+// Each field overrides the corresponding global setting for that pool.
+type poolConfig struct {
+	Name               string `json:"name"`
+	ClaimNamePrefix    string `json:"claimNamePrefix,omitempty"`
+	ClaimLimit         *int   `json:"claimLimit,omitempty"`
+	ClaimMax           *int   `json:"claimMax,omitempty"`
+	ClaimIncrement     *int   `json:"claimIncrement,omitempty"`
+	AvailableThreshold *int   `json:"claimAvailableThreshold,omitempty"`
+}
+
+// effectivePool is the fully resolved configuration for a single pool.
+type effectivePool struct {
+	name               string
+	claimNamePrefix    string
+	claimLimit         int
+	claimMax           int
+	claimIncrement     int
+	availableThreshold int
+}
+
 func main() {
-	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
+	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name(s), comma-separated, to filter by (required unless --cluster-pools-config is set)")
+	clusterPoolConfigStr := flag.String("cluster-pools-config", os.Getenv("CLUSTER_POOL_CONFIG"), "Optional JSON array of per-pool config: [{\"name\":\"pool1\",\"claimNamePrefix\":\"prelude\",\"claimLimit\":4,\"claimMax\":10,\"claimIncrement\":1,\"claimAvailableThreshold\":1}]")
 	clusterClaimLimitStr := flag.String("cluster-claim-limit", os.Getenv("CLUSTER_CLAIM_LIMIT"), "Base number of ClusterClaims to create (default 4)")
 	clusterClaimMaxStr := flag.String("cluster-claim-max", os.Getenv("CLUSTER_CLAIM_MAX"), "Maximum number of ClusterClaims when scaling up (default 10)")
 	clusterClaimIncrementStr := flag.String("cluster-claim-increment", os.Getenv("CLUSTER_CLAIM_INCREMENT"), "Number of ClusterClaims to add when scaling up (default 1)")
 	clusterClaimAvailableThresholdStr := flag.String("cluster-claim-available-threshold", os.Getenv("CLUSTER_CLAIM_AVAILABLE_THRESHOLD"), "Available cluster count at which to trigger scale-up (default 1)")
 	clusterClaimName := flag.String("cluster-claim-name", os.Getenv("CLUSTER_CLAIM_NAME"), "Name prefix for created ClusterClaims (default \"prelude\")")
 	flag.Parse()
-
-	if *clusterPool == "" {
-		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
-	}
 
 	claimLimit := 4
 	if *clusterClaimLimitStr != "" {
@@ -86,9 +106,101 @@ func main() {
 		claimNamePrefix = *clusterClaimName
 	}
 
-	log.Printf("Cluster pool: %s", *clusterPool)
-	log.Printf("Cluster claim name prefix: %s", claimNamePrefix)
-	log.Printf("Cluster claim limit: %d (max: %d, increment: %d, available threshold: %d)", claimLimit, claimMax, claimIncrement, availableThreshold)
+	// Parse the optional per-pool config
+	var poolOverrides []poolConfig
+	if *clusterPoolConfigStr != "" {
+		if err := json.Unmarshal([]byte(*clusterPoolConfigStr), &poolOverrides); err != nil {
+			log.Fatalf("Invalid --cluster-pools-config value: %v", err)
+		}
+		for _, pc := range poolOverrides {
+			if pc.Name == "" {
+				log.Fatalf("Invalid --cluster-pools-config: every entry needs a \"name\"")
+			}
+		}
+	}
+
+	// Build the pool list: per-pool config wins, otherwise CLUSTER_POOL
+	// (comma-separated).
+	var poolNames []string
+	if len(poolOverrides) > 0 {
+		for _, pc := range poolOverrides {
+			poolNames = append(poolNames, pc.Name)
+		}
+	} else {
+		if *clusterPool == "" {
+			log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
+		}
+		for _, p := range strings.Split(*clusterPool, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				poolNames = append(poolNames, p)
+			}
+		}
+		if len(poolNames) == 0 {
+			log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
+		}
+	}
+
+	// Resolve per-pool effective settings, falling back to the globals
+	overrideByName := make(map[string]poolConfig, len(poolOverrides))
+	for _, pc := range poolOverrides {
+		overrideByName[pc.Name] = pc
+	}
+	pools := make([]effectivePool, 0, len(poolNames))
+	for _, name := range poolNames {
+		ov, hasOv := overrideByName[name]
+
+		ep := effectivePool{name: name}
+		ep.claimLimit = claimLimit
+		if hasOv && ov.ClaimLimit != nil {
+			ep.claimLimit = *ov.ClaimLimit
+		}
+		ep.claimMax = claimMax
+		if hasOv && ov.ClaimMax != nil {
+			ep.claimMax = *ov.ClaimMax
+		}
+		ep.claimIncrement = claimIncrement
+		if hasOv && ov.ClaimIncrement != nil {
+			ep.claimIncrement = *ov.ClaimIncrement
+		}
+		ep.availableThreshold = availableThreshold
+		if hasOv && ov.AvailableThreshold != nil {
+			ep.availableThreshold = *ov.AvailableThreshold
+		}
+		if ep.claimMax < ep.claimLimit {
+			ep.claimMax = ep.claimLimit
+		}
+
+		// Claim name prefix: per-pool override wins; for a single pool keep
+		// the global prefix (backward compatible); for multiple pools derive
+		// the prefix from the pool name so claim names never collide.
+		switch {
+		case hasOv && ov.ClaimNamePrefix != "":
+			ep.claimNamePrefix = ov.ClaimNamePrefix
+		case len(poolNames) == 1:
+			ep.claimNamePrefix = claimNamePrefix
+		default:
+			ep.claimNamePrefix = name + "-"
+		}
+
+		pools = append(pools, ep)
+	}
+
+	// Fail fast on duplicate prefixes: ClusterClaim names are unique within
+	// the cluster-pools namespace, so two pools sharing a prefix would
+	// collide.
+	seenPrefix := make(map[string]string, len(pools))
+	for _, ep := range pools {
+		if prev, ok := seenPrefix[ep.claimNamePrefix]; ok {
+			log.Fatalf("Duplicate claim name prefix %q for pools %q and %q; set claimNamePrefix per pool", ep.claimNamePrefix, prev, ep.name)
+		}
+		seenPrefix[ep.claimNamePrefix] = ep.name
+	}
+
+	for _, ep := range pools {
+		log.Printf("Cluster pool: %s (claim prefix: %s, limit: %d, max: %d, increment: %d, available threshold: %d)",
+			ep.name, ep.claimNamePrefix, ep.claimLimit, ep.claimMax, ep.claimIncrement, ep.availableThreshold)
+	}
 
 	config, err := buildConfig()
 	if err != nil {
@@ -102,34 +214,44 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pool := *clusterPool
 
 	// Handle shutdown signals
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sig
-		log.Printf("Received shutdown signal")
-		cancel()
-	}()
 
-	// Step 1: Wait for at least one provisioned ClusterDeployment
-	log.Printf("Waiting for cluster pool %s to be provisioned...", pool)
-	if err := waitForProvisioned(ctx, dynClient, pool); err != nil {
-		log.Fatalf("Error waiting for provisioned: %v", err)
+	// One claimer loop per pool
+	for _, ep := range pools {
+		go func(ep effectivePool) {
+			log.Printf("Waiting for cluster pool %s to be provisioned...", ep.name)
+			if err := waitForProvisioned(ctx, dynClient, ep.name); err != nil {
+				log.Fatalf("Error waiting for provisioned pool %s: %v", ep.name, err)
+			}
+			reconcile(ctx, dynClient, ep)
+		}(ep)
 	}
 
-	// Step 2: Reconcile loop — watch for changes and create claims as needed
-	reconcile(ctx, dynClient, pool, claimNamePrefix, claimLimit, claimMax, claimIncrement, availableThreshold)
+	// Block until shutdown signal
+	<-sig
+	log.Printf("Received shutdown signal")
+	cancel()
 	log.Printf("Cluster claimer shutting down")
 }
 
-// reconcile continuously watches ClusterDeployments and creates ClusterClaims
-// as new deployments become provisioned, up to the claim limit. The effective
-// limit starts at baseLimit and increases when no clusters are available,
-// up to maxLimit. It scales back down to baseLimit after clusters have been
-// available for 10 minutes (hysteresis).
-func reconcile(ctx context.Context, dynClient dynamic.Interface, pool, claimNamePrefix string, baseLimit, maxLimit, increment, availableThreshold int) {
+// reconcile continuously watches ClusterDeployments for the pool and creates
+// ClusterClaims as new deployments become provisioned, up to the pool's claim
+// limit. The effective limit starts at baseLimit and increases when no
+// clusters are available, up to maxLimit. It scales back down to baseLimit
+// after clusters have been available for 10 minutes (hysteresis). One
+// reconcile loop runs per configured pool, each with its own limits and
+// hysteresis state.
+func reconcile(ctx context.Context, dynClient dynamic.Interface, ep effectivePool) {
+	pool := ep.name
+	claimNamePrefix := ep.claimNamePrefix
+	baseLimit := ep.claimLimit
+	maxLimit := ep.claimMax
+	increment := ep.claimIncrement
+	availableThreshold := ep.availableThreshold
+
 	labelSelector := fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool)
 	effectiveLimit := baseLimit
 	var availableSince time.Time // when available clusters were first seen

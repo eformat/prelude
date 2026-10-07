@@ -25,3 +25,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "prelude.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{- define "prelude.clusterPoolList" -}}
+{{- if kindIs "string" .Values.server.clusterPool -}}
+{{- .Values.server.clusterPool -}}
+{{- else -}}
+{{- join "," .Values.server.clusterPool -}}
+{{- end -}}
+{{- end }}

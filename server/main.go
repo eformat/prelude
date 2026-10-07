@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,62 +66,62 @@ var adminTokens = struct {
 }{m: make(map[string]bool)}
 
 var (
-	metricDeployments = prometheus.NewGauge(prometheus.GaugeOpts{
+	metricDeployments = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_cluster_deployments",
 		Help: "Number of ClusterDeployments matching the pool",
-	})
-	metricClaims = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaims = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_cluster_claims",
 		Help: "Number of ClusterClaims matching the pool",
-	})
-	metricReady = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_clusters_ready",
 		Help: "Number of ClusterClaims with prelude-auth=done",
-	})
-	metricAvailable = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricAvailable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_clusters_available",
 		Help: "Number of ready ClusterClaims with no phone label",
-	})
-	metricClaimed = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_clusters_claimed",
 		Help: "Number of ready ClusterClaims with a phone label",
-	})
+	}, []string{"pool"})
 	metricClaimedInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_cluster_info",
 		Help: "Claimed cluster info (value=1 per claimed cluster)",
-	}, []string{"phone", "cluster", "claimed_at"})
+	}, []string{"phone", "cluster", "claimed_at", "pool"})
 	metricClaimedTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_cluster_timestamp",
 		Help: "Unix timestamp when each cluster was claimed",
-	}, []string{"phone", "cluster"})
-	metricClaimedDuration1h = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"phone", "cluster", "pool"})
+	metricClaimedDuration1h = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_1h",
 		Help: "Number of clusters claimed less than 1h ago",
-	})
-	metricClaimedDuration3h = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDuration3h = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_3h",
 		Help: "Number of clusters claimed 1h-3h ago",
-	})
-	metricClaimedDuration6h = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDuration6h = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_6h",
 		Help: "Number of clusters claimed 3h-6h ago",
-	})
-	metricClaimedDuration12h = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDuration12h = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_12h",
 		Help: "Number of clusters claimed 6h-12h ago",
-	})
-	metricClaimedDuration24h = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDuration24h = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_24h",
 		Help: "Number of clusters claimed 12h-24h ago",
-	})
-	metricClaimedDuration1w = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDuration1w = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_le_1w",
 		Help: "Number of clusters claimed 1d-1w ago",
-	})
-	metricClaimedDurationGt1w = prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"pool"})
+	metricClaimedDurationGt1w = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prelude_claimed_duration_gt_1w",
 		Help: "Number of clusters claimed more than 1w ago",
-	})
+	}, []string{"pool"})
 )
 
 func init() {
@@ -274,12 +275,28 @@ func verifyRecaptcha(token string) error {
 }
 
 func main() {
-	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter ClusterClaims by (required)")
+	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name(s), comma-separated, to filter ClusterClaims by (required)")
 	clusterLifetime := flag.String("cluster-lifetime", os.Getenv("CLUSTER_LIFETIME"), "Lifetime to set on claimed ClusterClaims (e.g. 2h)")
 	flag.Parse()
 
 	if *clusterPool == "" {
 		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
+	}
+
+	// Parse the comma-separated pool list
+	var poolList []string
+	for _, p := range strings.Split(*clusterPool, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			poolList = append(poolList, p)
+		}
+	}
+	if len(poolList) == 0 {
+		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
+	}
+	pools := make(map[string]bool, len(poolList))
+	for _, p := range poolList {
+		pools[p] = true
 	}
 	if *clusterLifetime == "" {
 		*clusterLifetime = "2h"
@@ -323,7 +340,7 @@ func main() {
 		log.Printf("Keycloak password update disabled (KEYCLOAK_URL or KEYCLOAK_CLIENT_SECRET not set)")
 	}
 
-	log.Printf("Filtering ClusterClaims by clusterPoolName: %s", *clusterPool)
+	log.Printf("Filtering ClusterClaims by clusterPoolName(s): %s", strings.Join(poolList, ", "))
 	log.Printf("Cluster lifetime: %s", *clusterLifetime)
 
 	config, err := buildConfig()
@@ -341,21 +358,22 @@ func main() {
 		log.Fatalf("Error creating kubernetes client: %v", err)
 	}
 
-	pool := *clusterPool
 	lifetime := *clusterLifetime
 
 	// Background goroutine to update Prometheus metrics every 30s
 	go func() {
 		for {
-			stats, err := computeClusterStats(dynClient, pool, lifetime)
+			statsByPool, err := computeClusterStats(dynClient, pools, lifetime)
 			if err != nil {
 				log.Printf("Error computing cluster stats for metrics: %v", err)
 			} else {
-				metricDeployments.Set(float64(stats.deployments))
-				metricClaims.Set(float64(stats.claims))
-				metricReady.Set(float64(stats.ready))
-				metricAvailable.Set(float64(stats.available))
-				metricClaimed.Set(float64(stats.claimed))
+				for poolName, stats := range statsByPool {
+					metricDeployments.WithLabelValues(poolName).Set(float64(stats.deployments))
+					metricClaims.WithLabelValues(poolName).Set(float64(stats.claims))
+					metricReady.WithLabelValues(poolName).Set(float64(stats.ready))
+					metricAvailable.WithLabelValues(poolName).Set(float64(stats.available))
+					metricClaimed.WithLabelValues(poolName).Set(float64(stats.claimed))
+				}
 			}
 			time.Sleep(30 * time.Second)
 		}
@@ -374,11 +392,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/claim", func(w http.ResponseWriter, r *http.Request) {
-		handleClaim(w, r, dynClient, clientset, pool, lifetime)
+		handleClaim(w, r, dynClient, clientset, pools, lifetime)
 	})
 	mux.HandleFunc("/api/admin/login", handleAdminLogin)
 	mux.HandleFunc("/api/admin", func(w http.ResponseWriter, r *http.Request) {
-		handleAdmin(w, r, dynClient, pool)
+		handleAdmin(w, r, dynClient, pools)
 	})
 
 	staticDir := filepath.Join("..", "client", "out")
@@ -493,27 +511,36 @@ type clusterStats struct {
 	claimed     int
 }
 
-func computeClusterStats(dynClient dynamic.Interface, pool string, clusterLifetime string) (clusterStats, error) {
+func computeClusterStats(dynClient dynamic.Interface, pools map[string]bool, clusterLifetime string) (map[string]clusterStats, error) {
 	ctx := context.Background()
-	var s clusterStats
-
 	configuredDuration, _ := parseDuration(clusterLifetime)
+
+	statsByPool := make(map[string]clusterStats, len(pools))
+	for p := range pools {
+		statsByPool[p] = clusterStats{}
+	}
+	// 0:<1h, 1:1-3h, 2:3-6h, 3:6-12h, 4:12-24h, 5:1d-1w, 6:>1w
+	bucketCounts := make(map[string]*[7]float64, len(pools))
+	for p := range pools {
+		bucketCounts[p] = &[7]float64{}
+	}
 
 	claims, err := dynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return s, fmt.Errorf("listing ClusterClaims: %w", err)
+		return nil, fmt.Errorf("listing ClusterClaims: %w", err)
 	}
 
 	// Reset claimed info/timestamp gauges to clear stale entries
 	metricClaimedInfo.Reset()
 	metricClaimedTimestamp.Reset()
 
-	var bucketCounts [7]float64 // 0:<1h, 1:1-3h, 2:3-6h, 3:6-12h, 4:12-24h, 5:1d-1w, 6:>1w
-
 	for _, claim := range claims.Items {
-		if !claimMatchesPool(claim.Object, pool) {
+		poolName := claimPoolName(claim.Object)
+		if !pools[poolName] {
 			continue
 		}
+		s := statsByPool[poolName]
+		buckets := bucketCounts[poolName]
 		s.claims++
 		labels := claim.GetLabels()
 		if labels != nil && labels["prelude-auth"] == "done" {
@@ -555,54 +582,62 @@ func computeClusterStats(dynClient dynamic.Interface, pool string, clusterLifeti
 				if !claimedAt.IsZero() {
 					claimedAtStr = claimedAt.UTC().Format("2006-01-02 15:04:05")
 				}
-				metricClaimedInfo.WithLabelValues(phone, clusterNamespace, claimedAtStr).Set(1)
+				metricClaimedInfo.WithLabelValues(phone, clusterNamespace, claimedAtStr, poolName).Set(1)
 
 				if !claimedAt.IsZero() {
-					metricClaimedTimestamp.WithLabelValues(phone, clusterNamespace).Set(float64(claimedAt.UnixMilli()))
+					metricClaimedTimestamp.WithLabelValues(phone, clusterNamespace, poolName).Set(float64(claimedAt.UnixMilli()))
 					dur := time.Since(claimedAt)
 					switch {
 					case dur < time.Hour:
-						bucketCounts[0]++
+						buckets[0]++
 					case dur < 3*time.Hour:
-						bucketCounts[1]++
+						buckets[1]++
 					case dur < 6*time.Hour:
-						bucketCounts[2]++
+						buckets[2]++
 					case dur < 12*time.Hour:
-						bucketCounts[3]++
+						buckets[3]++
 					case dur < 24*time.Hour:
-						bucketCounts[4]++
+						buckets[4]++
 					case dur < 7*24*time.Hour:
-						bucketCounts[5]++
+						buckets[5]++
 					default:
-						bucketCounts[6]++
+						buckets[6]++
 					}
 				}
 			} else {
 				s.available++
 			}
 		}
+		statsByPool[poolName] = s
 	}
 
-	metricClaimedDuration1h.Set(bucketCounts[0])
-	metricClaimedDuration3h.Set(bucketCounts[1])
-	metricClaimedDuration6h.Set(bucketCounts[2])
-	metricClaimedDuration12h.Set(bucketCounts[3])
-	metricClaimedDuration24h.Set(bucketCounts[4])
-	metricClaimedDuration1w.Set(bucketCounts[5])
-	metricClaimedDurationGt1w.Set(bucketCounts[6])
-
-	deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool),
-	})
-	if err != nil {
-		return s, fmt.Errorf("listing ClusterDeployments: %w", err)
+	for poolName, buckets := range bucketCounts {
+		metricClaimedDuration1h.WithLabelValues(poolName).Set(buckets[0])
+		metricClaimedDuration3h.WithLabelValues(poolName).Set(buckets[1])
+		metricClaimedDuration6h.WithLabelValues(poolName).Set(buckets[2])
+		metricClaimedDuration12h.WithLabelValues(poolName).Set(buckets[3])
+		metricClaimedDuration24h.WithLabelValues(poolName).Set(buckets[4])
+		metricClaimedDuration1w.WithLabelValues(poolName).Set(buckets[5])
+		metricClaimedDurationGt1w.WithLabelValues(poolName).Set(buckets[6])
 	}
-	s.deployments = len(deployments.Items)
 
-	return s, nil
+	// Count ClusterDeployments per pool
+	for poolName := range pools {
+		deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", poolName),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing ClusterDeployments: %w", err)
+		}
+		s := statsByPool[poolName]
+		s.deployments = len(deployments.Items)
+		statsByPool[poolName] = s
+	}
+
+	return statsByPool, nil
 }
 
-func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, pool string) {
+func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, pools map[string]bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -625,7 +660,8 @@ func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 	var claimInfos []adminClaimInfo
 	for _, claim := range claims.Items {
-		if !claimMatchesPool(claim.Object, pool) {
+		poolName := claimPoolName(claim.Object)
+		if !pools[poolName] {
 			continue
 		}
 		labels := claim.GetLabels()
@@ -652,7 +688,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 		age := formatAge(time.Since(claim.GetCreationTimestamp().Time))
 		claimInfos = append(claimInfos, adminClaimInfo{
 			Name:          claim.GetName(),
-			Pool:          pool,
+			Pool:          poolName,
 			Phone:         phone,
 			Authenticated: authenticated,
 			Namespace:     ns,
@@ -663,7 +699,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 
 	// List ClusterDeployments across all namespaces filtered by pool label
 	deployments, err := dynClient.Resource(clusterDeploymentGVR).Namespace("").List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("hive.openshift.io/clusterpool-name=%s", pool),
+		LabelSelector: poolLabelSelector(pools),
 	})
 	if err != nil {
 		log.Printf("Admin: error listing ClusterDeployments: %v", err)
@@ -768,7 +804,7 @@ func formatAge(d time.Duration) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
-func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool string, clusterLifetime string) {
+func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Interface, clientset kubernetes.Interface, clusterPool map[string]bool, clusterLifetime string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1055,17 +1091,35 @@ func handleClaim(w http.ResponseWriter, r *http.Request, dynClient dynamic.Inter
 	log.Printf("Assigned cluster %s (claim: %s) to phone %s", clusterName, claimName, phone)
 }
 
-// claimMatchesPool checks if a ClusterClaim belongs to the specified ClusterPool.
-func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
+// claimPoolName returns the ClusterPool name from a ClusterClaim object,
+// or empty if not set.
+func claimPoolName(obj map[string]interface{}) string {
 	spec, ok := obj["spec"].(map[string]interface{})
 	if !ok {
-		return false
+		return ""
 	}
 	name, ok := spec["clusterPoolName"].(string)
 	if !ok {
-		return false
+		return ""
 	}
-	return name == poolName
+	return name
+}
+
+// claimMatchesPool checks if a ClusterClaim belongs to any of the configured
+// ClusterPools.
+func claimMatchesPool(obj map[string]interface{}, pools map[string]bool) bool {
+	return pools[claimPoolName(obj)]
+}
+
+// poolLabelSelector builds a set-based label selector matching any of the
+// configured pools, e.g. "hive.openshift.io/clusterpool-name in (a,b)".
+func poolLabelSelector(pools map[string]bool) string {
+	names := make([]string, 0, len(pools))
+	for p := range pools {
+		names = append(names, p)
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("hive.openshift.io/clusterpool-name in (%s)", strings.Join(names, ","))
 }
 
 // extractKubeconfig reads kubeconfig data from a Secret, handling common key names

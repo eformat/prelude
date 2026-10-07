@@ -172,7 +172,7 @@ export default function AdminPage() {
                 Cluster Claims
               </h2>
               <p className="font-rh-text text-rh-gray-50 text-sm mt-0.5">
-                ClusterClaims matching the configured pool
+                ClusterClaims across the configured pools
               </p>
             </div>
             <div className="overflow-x-auto">
@@ -180,6 +180,7 @@ export default function AdminPage() {
                 <thead>
                   <tr className="border-b border-rh-gray-20 bg-rh-gray-10">
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Name</th>
+                    <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Pool</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Phone</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Auth</th>
                     <th className="text-left px-6 py-3 font-rh-text font-semibold text-rh-gray-60 uppercase text-xs tracking-wider">Available</th>
@@ -191,7 +192,7 @@ export default function AdminPage() {
                 <tbody>
                   {claims.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={7} className="px-6 py-8 text-center font-rh-text text-rh-gray-50">
+                      <td colSpan={8} className="px-6 py-8 text-center font-rh-text text-rh-gray-50">
                         No cluster claims found
                       </td>
                     </tr>
@@ -199,6 +200,7 @@ export default function AdminPage() {
                   {claims.map((claim) => (
                     <tr key={claim.name} className="border-b border-rh-gray-20 last:border-b-0 hover:bg-rh-gray-10/50">
                       <td className="px-6 py-3 font-rh-text font-medium text-rh-gray-95">{claim.name}</td>
+                      <td className="px-6 py-3 font-mono text-rh-gray-60 text-xs">{claim.pool || "\u2014"}</td>
                       <td className="px-6 py-3 font-mono text-rh-gray-60 text-xs">{claim.phone || "\u2014"}</td>
                       <td className="px-6 py-3">
                         {claim.authenticated ? (
@@ -251,7 +253,7 @@ export default function AdminPage() {
                 Cluster Deployments
               </h2>
               <p className="font-rh-text text-rh-gray-50 text-sm mt-0.5">
-                ClusterDeployments for the configured pool
+                ClusterDeployments across the configured pools
               </p>
             </div>
             <div className="overflow-x-auto">

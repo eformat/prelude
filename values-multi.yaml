@@ -1,0 +1,13 @@
+---
+server:
+  clusterPool: prelude-m6wl4,coco-m6wl4
+
+clusterClaimer:
+  pools:
+    - name: prelude-m6wl4
+      claimNamePrefix: prelude
+      claimLimit: 4
+      claimMax: 10
+    - name: coco-m6wl4
+      claimNamePrefix: coco
+      claimLimit: 4

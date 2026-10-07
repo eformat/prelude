@@ -43,7 +43,7 @@ spec:
               value: /etc/prelude/kubeconfig/kubeconfig
             {{- end }}
             - name: CLUSTER_POOL
-              value: "{{ .Values.server.clusterPool }}"
+              value: {{ include "prelude.clusterPoolList" . | quote }}
             - name: CLUSTER_LIFETIME
               value: "{{ .Values.server.clusterLifetime }}"
             {{- if .Values.server.recaptchaSiteKey }}
@@ -105,7 +105,11 @@ spec:
               value: /etc/prelude/kubeconfig/kubeconfig
             {{- end }}
             - name: CLUSTER_POOL
-              value: "{{ .Values.server.clusterPool }}"
+              value: {{ include "prelude.clusterPoolList" . | quote }}
+            {{- if .Values.clusterClaimer.pools }}
+            - name: CLUSTER_POOL_CONFIG
+              value: {{ .Values.clusterClaimer.pools | toJson | quote }}
+            {{- end }}
             - name: CLUSTER_CLAIM_NAME
               value: "{{ .Values.clusterClaimer.clusterClaimName }}"
             - name: CLUSTER_CLAIM_LIMIT
@@ -131,7 +135,7 @@ spec:
               value: /etc/prelude/kubeconfig/kubeconfig
             {{- end }}
             - name: CLUSTER_POOL
-              value: "{{ .Values.server.clusterPool }}"
+              value: {{ include "prelude.clusterPoolList" . | quote }}
             {{- if .Values.clusterAuthenticator.keycloakUrl }}
             - name: KEYCLOAK_URL
               value: "{{ .Values.clusterAuthenticator.keycloakUrl }}"

@@ -1,16 +1,12 @@
 {
     "annotations": {
-        "list": [
-
-        ]
+        "list": []
     },
     "editable": true,
     "gnetId": null,
     "graphTooltip": 1,
     "hideControls": false,
-    "links": [
-
-    ],
+    "links": [],
     "refresh": "30s",
     "rows": [
         {
@@ -23,7 +19,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "prelude_clusters_available",
+                            "expr": "sum(prelude_clusters_available{pool=~\"$pool\"})",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -58,7 +54,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "prelude_clusters_claimed",
+                            "expr": "sum(prelude_clusters_claimed{pool=~\"$pool\"})",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -93,7 +89,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "(prelude_clusters_claimed / prelude_clusters_ready) * 100",
+                            "expr": "(sum(prelude_clusters_claimed{pool=~\"$pool\"}) / sum(prelude_clusters_ready{pool=~\"$pool\"})) * 100",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -146,7 +142,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "prelude_clusters_ready",
+                            "expr": "sum(prelude_clusters_ready{pool=~\"$pool\"})",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -181,7 +177,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "prelude_cluster_claims",
+                            "expr": "sum(prelude_cluster_claims{pool=~\"$pool\"})",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -216,7 +212,7 @@
                     "span": 4,
                     "targets": [
                         {
-                            "expr": "prelude_cluster_deployments",
+                            "expr": "sum(prelude_cluster_deployments{pool=~\"$pool\"})",
                             "format": "time_series",
                             "legendFormat": "",
                             "legendLink": null
@@ -280,38 +276,32 @@
                     },
                     "lines": true,
                     "linewidth": 0,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 6,
                     "stack": true,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "prelude_clusters_available",
+                            "expr": "sum by (pool) (prelude_clusters_available{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Available",
+                            "legendFormat": "Available {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_clusters_claimed",
+                            "expr": "sum by (pool) (prelude_clusters_claimed{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Claimed",
+                            "legendFormat": "Claimed {{pool}}",
                             "legendLink": null
                         }
                     ],
-                    "thresholds": [
-
-                    ],
+                    "thresholds": [],
                     "timeFrom": null,
                     "timeShift": null,
                     "title": "Available vs Claimed",
@@ -326,9 +316,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -374,56 +362,50 @@
                     },
                     "lines": true,
                     "linewidth": 2,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 6,
                     "stack": false,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "prelude_cluster_deployments",
+                            "expr": "sum by (pool) (prelude_cluster_deployments{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Deployments",
+                            "legendFormat": "Deployments {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_cluster_claims",
+                            "expr": "sum by (pool) (prelude_cluster_claims{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Claims",
+                            "legendFormat": "Claims {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_clusters_ready",
+                            "expr": "sum by (pool) (prelude_clusters_ready{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Ready",
+                            "legendFormat": "Ready {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_clusters_available",
+                            "expr": "sum by (pool) (prelude_clusters_available{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Available",
+                            "legendFormat": "Available {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_clusters_claimed",
+                            "expr": "sum by (pool) (prelude_clusters_claimed{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Claimed",
+                            "legendFormat": "Claimed {{pool}}",
                             "legendLink": null
                         }
                     ],
-                    "thresholds": [
-
-                    ],
+                    "thresholds": [],
                     "timeFrom": null,
                     "timeShift": null,
                     "title": "Provisioning Pipeline",
@@ -438,9 +420,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -494,26 +474,22 @@
                     },
                     "lines": true,
                     "linewidth": 2,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 4,
                     "stack": false,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "(prelude_clusters_claimed / prelude_clusters_ready) * 100",
+                            "expr": "(sum by (pool) (prelude_clusters_claimed{pool=~\"$pool\"}) / sum by (pool) (prelude_clusters_ready{pool=~\"$pool\"})) * 100",
                             "format": "time_series",
-                            "legendFormat": "Utilization %",
+                            "legendFormat": "Utilization % {{pool}}",
                             "legendLink": null
                         }
                     ],
@@ -549,9 +525,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -593,32 +567,26 @@
                     },
                     "lines": true,
                     "linewidth": 2,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 4,
                     "stack": false,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "prelude_cluster_claims - prelude_clusters_ready",
+                            "expr": "sum by (pool) (prelude_cluster_claims{pool=~\"$pool\"}) - sum by (pool) (prelude_clusters_ready{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Pending Authentication",
+                            "legendFormat": "Pending Authentication {{pool}}",
                             "legendLink": null
                         }
                     ],
-                    "thresholds": [
-
-                    ],
+                    "thresholds": [],
                     "timeFrom": null,
                     "timeShift": null,
                     "title": "Pending Authentication",
@@ -633,9 +601,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -677,32 +643,26 @@
                     },
                     "lines": true,
                     "linewidth": 2,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 4,
                     "stack": false,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "prelude_cluster_deployments - prelude_cluster_claims",
+                            "expr": "sum by (pool) (prelude_cluster_deployments{pool=~\"$pool\"}) - sum by (pool) (prelude_cluster_claims{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "Unclaimed Deployments",
+                            "legendFormat": "Unclaimed Deployments {{pool}}",
                             "legendLink": null
                         }
                     ],
-                    "thresholds": [
-
-                    ],
+                    "thresholds": [],
                     "timeFrom": null,
                     "timeShift": null,
                     "title": "Pool Headroom",
@@ -717,9 +677,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -779,68 +737,62 @@
                     },
                     "lines": false,
                     "linewidth": 0,
-                    "links": [
-
-                    ],
+                    "links": [],
                     "nullPointMode": "null as zero",
                     "percentage": false,
                     "pointradius": 5,
                     "points": false,
                     "renderer": "flot",
-                    "seriesOverrides": [
-
-                    ],
+                    "seriesOverrides": [],
                     "spaceLength": 10,
                     "span": 6,
                     "stack": true,
                     "steppedLine": false,
                     "targets": [
                         {
-                            "expr": "prelude_claimed_duration_le_1h",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_1h{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "< 1h",
+                            "legendFormat": "< 1h {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_le_3h",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_3h{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "1h - 3h",
+                            "legendFormat": "1h - 3h {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_le_6h",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_6h{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "3h - 6h",
+                            "legendFormat": "3h - 6h {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_le_12h",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_12h{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "6h - 12h",
+                            "legendFormat": "6h - 12h {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_le_24h",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_24h{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "12h - 24h",
+                            "legendFormat": "12h - 24h {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_le_1w",
+                            "expr": "sum by (pool) (prelude_claimed_duration_le_1w{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "1d - 1w",
+                            "legendFormat": "1d - 1w {{pool}}",
                             "legendLink": null
                         },
                         {
-                            "expr": "prelude_claimed_duration_gt_1w",
+                            "expr": "sum by (pool) (prelude_claimed_duration_gt_1w{pool=~\"$pool\"})",
                             "format": "time_series",
-                            "legendFormat": "> 1w",
+                            "legendFormat": "> 1w {{pool}}",
                             "legendLink": null
                         }
                     ],
-                    "thresholds": [
-
-                    ],
+                    "thresholds": [],
                     "timeFrom": null,
                     "timeShift": null,
                     "title": "Claimed Duration Distribution",
@@ -855,9 +807,7 @@
                         "mode": "time",
                         "name": null,
                         "show": true,
-                        "values": [
-
-                        ]
+                        "values": []
                     },
                     "yaxes": [
                         {
@@ -884,7 +834,7 @@
                     "span": 6,
                     "targets": [
                         {
-                            "expr": "prelude_claimed_cluster_info",
+                            "expr": "prelude_claimed_cluster_info{pool=~\"$pool\"}",
                             "format": "table",
                             "instant": true,
                             "legendFormat": "",
@@ -919,6 +869,11 @@
                             "alias": "",
                             "pattern": "Value",
                             "type": "hidden"
+                        },
+                        {
+                            "alias": "Pool",
+                            "pattern": "pool",
+                            "type": "string"
                         }
                     ],
                     "fontSize": "100%",
@@ -955,13 +910,30 @@
                 "hide": 0,
                 "label": "Data source",
                 "name": "datasource",
-                "options": [
-
-                ],
+                "options": [],
                 "query": "prometheus",
                 "refresh": 1,
                 "regex": "",
                 "type": "datasource"
+            },
+            {
+                "allValue": ".*",
+                "current": {
+                    "text": "All",
+                    "value": "$__all"
+                },
+                "datasource": "$datasource",
+                "hide": 0,
+                "includeAll": true,
+                "label": "Pool",
+                "multi": true,
+                "name": "pool",
+                "options": [],
+                "query": "label_values(prelude_clusters_available, pool)",
+                "refresh": 1,
+                "regex": "",
+                "sort": 1,
+                "type": "query"
             }
         ]
     },

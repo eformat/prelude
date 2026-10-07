@@ -147,14 +147,28 @@ var keycloakClientSecret string
 var preludeUserPassword string
 
 func main() {
-	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name to filter by (required)")
+	clusterPool := flag.String("cluster-pool", os.Getenv("CLUSTER_POOL"), "ClusterPool name(s), comma-separated, to filter by (required)")
 	flag.Parse()
 
 	if *clusterPool == "" {
 		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
 	}
 
-	log.Printf("Cluster pool: %s", *clusterPool)
+	// Parse the comma-separated pool list
+	pools := make(map[string]bool)
+	var poolList []string
+	for _, p := range strings.Split(*clusterPool, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			pools[p] = true
+			poolList = append(poolList, p)
+		}
+	}
+	if len(poolList) == 0 {
+		log.Fatalf("--cluster-pool flag or CLUSTER_POOL environment variable is required")
+	}
+
+	log.Printf("Cluster pool(s): %s", strings.Join(poolList, ", "))
 
 	config, err := buildConfig()
 	if err != nil {
@@ -183,7 +197,7 @@ func main() {
 		cancel()
 	}()
 
-	go checkSignerExpiry(ctx, hubDynClient, hubClientset, *clusterPool)
+	go checkSignerExpiry(ctx, hubDynClient, hubClientset, pools)
 
 	keycloakURL = os.Getenv("KEYCLOAK_URL")
 	keycloakClientSecret = os.Getenv("KEYCLOAK_CLIENT_SECRET")
@@ -200,19 +214,19 @@ func main() {
 		log.Printf("SSO setup disabled (KEYCLOAK_URL not set)")
 	}
 
-	reconcile(ctx, hubDynClient, hubClientset, *clusterPool)
+	reconcile(ctx, hubDynClient, hubClientset, pools)
 	log.Printf("Cluster authenticator shutting down")
 }
 
 // reconcile continuously watches ClusterClaims and authenticates bound claims
 // that haven't been processed yet.
-func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
+func reconcile(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pools map[string]bool) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		processUnauthenticatedClaims(ctx, hubDynClient, hubClientset, pool)
+		processUnauthenticatedClaims(ctx, hubDynClient, hubClientset, pools)
 
 		// Watch for ClusterClaim changes, then re-reconcile
 		var timeoutSecs int64 = 30
@@ -247,7 +261,7 @@ var inFlight sync.Map
 
 // processUnauthenticatedClaims finds bound ClusterClaims without the
 // prelude-auth=done label and launches a goroutine for each.
-func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
+func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pools map[string]bool) {
 	claims, err := hubDynClient.Resource(clusterClaimGVR).Namespace(clusterPoolNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error listing ClusterClaims: %v", err)
@@ -259,7 +273,7 @@ func processUnauthenticatedClaims(ctx context.Context, hubDynClient dynamic.Inte
 			return
 		}
 
-		if !claimMatchesPool(claim.Object, pool) {
+		if !claimMatchesPool(claim.Object, pools) {
 			continue
 		}
 
@@ -832,8 +846,9 @@ func labelClaimAuthenticated(ctx context.Context, hubDynClient dynamic.Interface
 	return err
 }
 
-// claimMatchesPool checks if a ClusterClaim belongs to the specified ClusterPool.
-func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
+// claimMatchesPool checks if a ClusterClaim belongs to any of the configured
+// ClusterPools.
+func claimMatchesPool(obj map[string]interface{}, pools map[string]bool) bool {
 	spec, ok := obj["spec"].(map[string]interface{})
 	if !ok {
 		return false
@@ -842,7 +857,7 @@ func claimMatchesPool(obj map[string]interface{}, poolName string) bool {
 	if !ok {
 		return false
 	}
-	return name == poolName
+	return pools[name]
 }
 
 // getSpecNamespace returns spec.namespace from a ClusterClaim, or empty if not set.
@@ -902,7 +917,7 @@ func extractKubeconfig(secret *corev1.Secret) string {
 
 // checkSignerExpiry periodically checks available clusters for CSR signer
 // certificate rotation and regenerates kubeconfig certs when needed.
-func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pool string) {
+func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubClientset kubernetes.Interface, pools map[string]bool) {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
@@ -922,7 +937,7 @@ func checkSignerExpiry(ctx context.Context, hubDynClient dynamic.Interface, hubC
 					return
 				}
 
-				if !claimMatchesPool(claim.Object, pool) {
+				if !claimMatchesPool(claim.Object, pools) {
 					continue
 				}
 

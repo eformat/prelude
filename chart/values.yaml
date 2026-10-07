@@ -67,6 +67,26 @@ clusterClaimer:
   clusterClaimMax: "10"
   clusterClaimIncrement: "1"
   clusterClaimAvailableThreshold: "1"
+  # Optional per-pool configuration for monitoring multiple ClusterPools with
+  # a single install. Each entry gets its own claimer loop, with its own
+  # limits (falling back to the global values above) and its own claim name
+  # prefix so claim names never collide in the cluster-pools namespace.
+  # The pool list also overrides server.clusterPool for the claimer.
+  #   - a "prelude-m6wl4" pool with claimNamePrefix "prelude" -> prelude-1, prelude-2, ...
+  #   - a "coco-xyz" pool with claimNamePrefix "coco"         -> coco-1, coco-2, ...
+  # If claimNamePrefix is omitted for multiple pools, it defaults to the pool
+  # name (e.g. prelude-m6wl4-1). With a single pool, clusterClaimName is kept
+  # for backward compatibility.
+  pools: []
+  #  - name: prelude-m6wl4
+  #    claimNamePrefix: prelude
+  #    claimLimit: 4
+  #    claimMax: 10
+  #    claimIncrement: 1
+  #    claimAvailableThreshold: 1
+  #  - name: coco-xyz
+  #    claimNamePrefix: coco
+  #    claimLimit: 4
 
 clusterAuthenticator:
   image:
